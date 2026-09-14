@@ -605,6 +605,10 @@ TOOLS.update({
                 "align": {"type": "integer", "enum": [0, 1, 2], "default": 1},
                 "bold": {"type": "boolean", "default": False},
                 "line_spacing": {"type": "number", "default": 0.25},
+                "max_chars_per_line": {"type": "integer", "minimum": 12, "maximum": 120,
+                                       "description": "Limite por linha antes de quebrar "
+                                                      "em limite de palavra. Omitir "
+                                                      "calcula pelo font_size."},
             },
             "required": ["draft_id"], "additionalProperties": False,
         },

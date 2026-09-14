@@ -320,3 +320,57 @@ def test_sub34_roundtrip_srt():
     again = SUB.parse_srt(SUB.to_srt(blocks))
     assert [(b["start"], b["end"], b["text"]) for b in blocks] == \
            [(b["start"], b["end"], b["text"]) for b in again]
+
+
+# ============================== quebra em limite de palavra (achado visual)
+def test_sub35_legenda_longa_quebra_em_limite_de_palavra(draft):
+    """Verificado na tela: o CapCut quebra por CARACTERE, partindo a palavra."""
+    longa = 'Emoji e "aspas" e reticencias bem compridas aqui'
+    d, bus = call("capcut.subtitle.add", draft_id=draft, segments=[
+        {"start": 0.0, "end": 3.0, "text": longa}])
+    assert any(w["code"] == "SUBTITLE_WRAPPED" for w in bus.warnings)
+    assert d["wrapped_blocks"] == [1]
+    import json as _json
+    from capcut_mcp.upstream import DRAFT_CACHE
+    texto = _json.loads(DRAFT_CACHE[draft].materials.texts[0]["content"])["text"]
+    assert "\n" in texto
+    for linha in texto.split("\n"):
+        assert len(linha) <= d["max_chars_per_line"]
+    # nenhuma palavra foi partida
+    assert set(longa.split()) == set(texto.replace("\n", " ").split())
+
+
+def test_sub36_legenda_curta_nao_e_tocada(draft):
+    d, bus = call("capcut.subtitle.add", draft_id=draft, segments=[
+        {"start": 0.0, "end": 2.0, "text": "curta"}])
+    assert d["wrapped_blocks"] == []
+    assert not any(w["code"] == "SUBTITLE_WRAPPED" for w in bus.warnings)
+
+
+def test_sub37_limite_escala_com_o_tamanho_da_fonte(draft):
+    d8, _ = call("capcut.subtitle.add", draft_id=draft, font_size=8.0,
+                 segments=[{"start": 0.0, "end": 1.0, "text": "x"}])
+    d16, _ = call("capcut.subtitle.add", draft_id=draft, font_size=16.0,
+                  track="s2", segments=[{"start": 0.0, "end": 1.0, "text": "x"}])
+    assert d16["max_chars_per_line"] < d8["max_chars_per_line"]
+
+
+def test_sub38_limite_explicito_respeitado(draft):
+    d, _ = call("capcut.subtitle.add", draft_id=draft, max_chars_per_line=15,
+                segments=[{"start": 0.0, "end": 3.0,
+                           "text": "uma frase razoavelmente longa aqui"}])
+    assert d["max_chars_per_line"] == 15
+    import json as _json
+    from capcut_mcp.upstream import DRAFT_CACHE
+    texto = _json.loads(DRAFT_CACHE[draft].materials.texts[0]["content"])["text"]
+    assert all(len(l) <= 15 for l in texto.split("\n"))
+
+
+def test_sub39_palavra_maior_que_o_limite_nao_e_partida(draft):
+    d, _ = call("capcut.subtitle.add", draft_id=draft, max_chars_per_line=12,
+                segments=[{"start": 0.0, "end": 2.0,
+                           "text": "anticonstitucionalissimamente"}])
+    import json as _json
+    from capcut_mcp.upstream import DRAFT_CACHE
+    texto = _json.loads(DRAFT_CACHE[draft].materials.texts[0]["content"])["text"]
+    assert texto == "anticonstitucionalissimamente", "palavra não deve ser cortada"

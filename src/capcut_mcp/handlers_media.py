@@ -465,7 +465,23 @@ def apply_subtitle(script: Any, draft_id: str, a: Dict[str, Any],
     fixed_width = (SUB.FIXED_WIDTH_PORTRAIT if portrait
                    else SUB.FIXED_WIDTH_LANDSCAPE)
 
-    # ---- 2. mutar
+    # ---- 2. quebrar em limite de palavra (o app quebra por caractere)
+    limit = int(a.get("max_chars_per_line")
+                or SUB.chars_per_line(font_size, fixed_width))
+    wrapped_any = []
+    for b in blocks:
+        novo, houve = SUB.wrap_text(b["text"], limit)
+        b["text"] = novo
+        if houve:
+            wrapped_any.append(b["index"])
+    if wrapped_any:
+        bus.add("SUBTITLE_WRAPPED",
+                f"{len(wrapped_any)} legenda(s) passaram de {limit} caracteres e foram "
+                "quebradas em limite de palavra. Sem isso o CapCut quebraria no meio da "
+                "palavra (verificado). Encurte o texto ou ajuste max_chars_per_line.",
+                blocks=wrapped_any, limit=limit)
+
+    # ---- 3. mutar
     from add_text_impl import add_text_impl
     created = []
     with bus.capture():
@@ -524,6 +540,8 @@ def apply_subtitle(script: Any, draft_id: str, a: Dict[str, Any],
         "resolved_font": resolved_font,
         "fixed_width_ratio": fixed_width,
         "gaps_over_500ms": gaps,
+        "max_chars_per_line": limit,
+        "wrapped_blocks": wrapped_any,
         "blocks": created,
     }
 

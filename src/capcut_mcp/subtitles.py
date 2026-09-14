@@ -216,3 +216,46 @@ def to_srt(blocks: List[Dict[str, Any]]) -> str:
         parts.append(f"{b['index']}\n{stamp(b['start'])} --> {stamp(b['end'])}\n"
                      f"{b['text']}\n")
     return "\n".join(parts)
+
+
+# --------------------------------------------------------------- word wrap
+# Verificado visualmente no CapCut 9.4.1, com fixed_width=0.6 e font_size=8.0:
+#   * 27 caracteres ('Pão, ótimo, çãõ — travessão') couberam em UMA linha;
+#   * 31 caracteres ('Emoji 🎬 e "aspas" … reticências') quebraram DENTRO da palavra,
+#     virando 'reticê' / 'ncias'.
+# O app quebra por caractere, não por palavra. A correção é o L1 quebrar em limite de
+# palavra antes de entregar o texto — quebras reais funcionam (confirmado na tela).
+#
+# O limite real está entre 28 e 30 caracteres, mas contagem de caracteres é uma
+# aproximação: a largura varia por glifo (o emoji ocupa o dobro, '…' ocupa menos).
+# Ficamos em 26, deliberadamente conservador: uma quebra extra é cosmética, uma
+# palavra partida no meio é defeito visível. O agente ajusta com max_chars_per_line.
+CHARS_PER_LINE_AT_SIZE_8 = 26
+
+
+def chars_per_line(font_size: float, width_ratio: float) -> int:
+    """Estimativa de caracteres por linha, medida na tela e escalada."""
+    base = CHARS_PER_LINE_AT_SIZE_8 * (8.0 / max(font_size, 0.1))
+    scaled = base * (width_ratio / FIXED_WIDTH_PORTRAIT)
+    return max(12, min(120, int(scaled)))
+
+
+def wrap_text(text: str, limit: int) -> Tuple[str, bool]:
+    """Quebra em limite de palavra, preservando as quebras já existentes.
+
+    Devolve (texto, houve_quebra). Palavra sozinha maior que o limite é mantida
+    intacta — melhor estourar a largura do que cortar a palavra no meio.
+    """
+    import textwrap
+    out_lines: List[str] = []
+    wrapped = False
+    for line in text.split("\n"):
+        if len(line) <= limit:
+            out_lines.append(line)
+            continue
+        pieces = textwrap.wrap(line, width=limit, break_long_words=False,
+                               break_on_hyphens=False) or [line]
+        if len(pieces) > 1:
+            wrapped = True
+        out_lines.extend(pieces)
+    return "\n".join(out_lines), wrapped
