@@ -37,6 +37,7 @@ INSTRUCTIONS = (
     "  3. capcut.video.cut(source, keep=[[0,5],[12,18]])  — trechos que FICAM\n"
     "  4. capcut.subtitle.add(srt=...) ou (segments=[{start,end,text}])\n"
     "  5. capcut.text.add_many(items=[{text,timeline_start,duration}])\n"
+    "     ou capcut.text.add para um texto só\n"
     "  6. capcut.draft.validate(draft_id)  — confira antes de gravar\n"
     "  7. capcut.draft.save(draft_id)\n"
     "  8. No CapCut, volte à página inicial para ele reler o disco.\n\n"
@@ -44,9 +45,9 @@ INSTRUCTIONS = (
     "CapCut. font_size está na escala interna do app (~3-20), não em pontos: 15 é o "
     "tamanho de um título, 8 o de uma legenda. transform_x/y são normalizados em "
     "'meia tela', e Y POSITIVO é para CIMA.\n\n"
-    "NÃO EXISTE: editar um segmento já adicionado (use capcut.draft.rebuild), "
-    "renderizar vídeo, recarregar o CapCut automaticamente. Transição é gravada mas o "
-    "app não a aplica.\n\n"
+    "NÃO EXISTE: editar, mover ou remover um segmento já adicionado — para corrigir, "
+    "crie o draft de novo; imagem, áudio, efeitos, transições e keyframes; renderizar "
+    "vídeo; recarregar o CapCut automaticamente.\n\n"
     "Se algo falhar, chame capcut.system.doctor."
 )
 
@@ -129,14 +130,15 @@ def handle(request: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 def _call_tool(msg_id: Any, params: Dict[str, Any]) -> Dict[str, Any]:
     name = params.get("name", "")
     args = params.get("arguments") or {}
-    spec = tools.TOOLS.get(name)
+    habilitadas = tools.enabled()
+    spec = habilitadas.get(name)
     started = time.time()
     bus = obs.WarningBus()
 
     if spec is None:
         env = E.err_envelope(
             E.CapcutError(E.OPERATION_NOT_SUPPORTED, f"Tool desconhecida: {name}",
-                          f"Tools disponíveis: {', '.join(tools.TOOLS)}."),
+                          f"Tools disponíveis: {', '.join(habilitadas)}."),
             meta={"tool": name})
         return _reply(msg_id, _content(env, is_error=True))
 

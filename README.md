@@ -26,16 +26,29 @@ PYTHONPATH=src ./.venv/bin/python -m capcut_mcp.server   # fala MCP por stdio
 Requer FFmpeg (`brew install ffmpeg`), CapCut Desktop instalado, e **pelo menos um
 projeto criado à mão** no CapCut — ele serve de esqueleto real da sua versão.
 
-## Tools (Phase 2)
+## Escopo
+
+Cortar vídeo, legendar, e colocar textos em momentos pré-determinados. Nada além disso.
+
+## Tools expostas (9)
 
 | Tool | O que faz |
 |---|---|
-| `capcut.system.doctor` | Diagnóstico: versão do app, diretório de drafts, referência, ffprobe, disco |
-| `capcut.draft.create` | Cria o draft em memória e devolve o `draft_id` |
-| `capcut.draft.save` | Grava no diretório do CapCut no formato multi-timeline correto |
+| `capcut.system.doctor` | Diagnóstico: versão do app, diretório de drafts, projeto de referência, ffprobe, disco |
+| `capcut.media.probe` | Duração, dimensões e formato reais, via ffprobe, em lote |
+| `capcut.draft.create` | Cria o draft e devolve o `draft_id` |
+| `capcut.video.cut` | Corta declarando os trechos que **ficam**: `keep=[[0,3],[5,8]]` |
+| `capcut.subtitle.add` | Legendas de SRT (arquivo, URL ou inline) ou de `segments=[{start,end,text}]` |
+| `capcut.text.add` | Um texto, com estilo completo |
+| `capcut.text.add_many` | Vários textos em momentos pré-determinados, estilo compartilhado |
+| `capcut.draft.validate` | 11 regras de verificação antes de gravar |
+| `capcut.draft.save` | Valida e grava no formato multi-timeline que o CapCut 9.x exige |
 
-Não existem (e não são expostas): reordenar clipes, editar segmento, renderizar vídeo,
-recarregar o CapCut.
+**Não existe:** editar, mover ou remover segmento já adicionado; imagem, áudio,
+efeitos, transições e keyframes; renderizar vídeo; recarregar o CapCut.
+
+Imagem, áudio, catálogos, `inspect` e `rebuild` continuam **implementados e testados**,
+fora da superfície MCP. Para expô-los: `CAPCUT_ENABLE_ALL_TOOLS=1`.
 
 ## Testes
 

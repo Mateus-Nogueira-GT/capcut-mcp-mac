@@ -286,11 +286,40 @@ TOOLS: Dict[str, Dict[str, Any]] = {
 }
 
 
+# ==========================================================================
+# Superfície MCP exposta.
+#
+# O escopo pedido é: cortar, legendar e colocar textos em momentos
+# pré-determinados. Só essas tools são oferecidas ao agente. As demais continuam
+# implementadas e testadas — apenas não entram no `tools/list`, porque superfície
+# a mais só dá ao agente mais formas de errar fora do escopo.
+#
+# Para reativar todas: CAPCUT_ENABLE_ALL_TOOLS=1 no ambiente.
+# ==========================================================================
+ENABLED_TOOLS = (
+    "capcut.system.doctor",
+    "capcut.media.probe",
+    "capcut.draft.create",
+    "capcut.video.cut",
+    "capcut.subtitle.add",
+    "capcut.text.add",
+    "capcut.text.add_many",
+    "capcut.draft.validate",
+    "capcut.draft.save",
+)
+
+
+def enabled() -> Dict[str, Any]:
+    if os.environ.get("CAPCUT_ENABLE_ALL_TOOLS") == "1":
+        return TOOLS
+    return {name: TOOLS[name] for name in ENABLED_TOOLS if name in TOOLS}
+
+
 def tool_list() -> list:
     return [
         {"name": name, "title": spec["title"], "description": spec["description"],
          "inputSchema": spec["schema"]}
-        for name, spec in TOOLS.items()
+        for name, spec in enabled().items()
     ]
 
 
@@ -330,7 +359,8 @@ _COMMON_VISUAL = {
               "description": "Camada relativa entre tracks do mesmo tipo; maior fica "
                              "na frente. Use para picture-in-picture."},
     "mask": {"type": "string",
-             "description": "Nome exato do catálogo 'mask' (ex.: Circle, Rectangle)."},
+             "description": "Nome exato da máscara. As 9 opções: Split, Filmstrip, "
+                            "Circle, Rectangle, Heart, Star, Mirror, Linear, Love."},
     "transition": {"type": "string",
                    "description": "Nome exato do catálogo 'transition' (ex.: Mix). "
                                   "ATENCAO: verificado no CapCut 9.4.1 que a transicao "
@@ -501,7 +531,9 @@ TOOLS.update({
             "de caracteres. ATENÇÃO ao tamanho: font_size está na escala interna do "
             f"CapCut, aproximadamente 3–20, e {_HM.FONT_SIZE_DEFAULT} é o tamanho "
             "padrão do app — não são pontos nem pixels. "
-            f"{_TIME_NOTE} {_TRANSFORM_NOTE} Animação de loop não é aplicável."
+            f"{_TIME_NOTE} {_TRANSFORM_NOTE} Para vários textos de uma vez, use "
+            "capcut.text.add_many. Não existe edição de um texto já adicionado: para "
+            "corrigir, crie o draft de novo."
         ),
         "schema": {
             "type": "object",
@@ -514,7 +546,11 @@ TOOLS.update({
                                    "description": "Omitir anexa ao fim da track."},
                 "duration": {"type": "number", "default": 3.0},
                 "font": {"type": "string",
-                         "description": "Nome exato do catálogo 'font' (335 opções)."},
+                         "description": "Nome exato de uma das 335 fontes do CapCut. "
+                                        "Omitir usa a fonte padrão do app, que "
+                                        "renderiza acentuação portuguesa corretamente "
+                                        "— é a escolha recomendada. Nome inválido "
+                                        "devolve erro com sugestões parecidas."},
                 "font_size": {"type": "number", "minimum": 1, "maximum": 100,
                               "default": _HM.FONT_SIZE_DEFAULT,
                               "description": "Escala interna do CapCut (~3–20), não pt."},
@@ -541,9 +577,13 @@ TOOLS.update({
                 "background_round_radius": {"type": "number"},
                 "shadow_enabled": {"type": "boolean"},
                 "intro_animation": {"type": "string",
-                                    "description": "Nome do catálogo 'text_intro'."},
+                                    "description": "Animação de entrada do texto "
+                                                   "(ex.: Typewriter, Fade_In). Nome "
+                                                   "inválido devolve sugestões."},
                 "outro_animation": {"type": "string",
-                                    "description": "Nome do catálogo 'text_outro'."},
+                                    "description": "Animação de saída do texto "
+                                                   "(ex.: Fade_Out). Nome inválido "
+                                                   "devolve sugestões."},
                 "text_styles": {
                     "type": "array",
                     "description": "Estilos por faixa de caracteres, sem sobreposição.",
@@ -617,9 +657,11 @@ TOOLS.update({
                                          "semitransparente; outline_boxed = os dois; "
                                          "plain = sem contraste (não recomendado)."},
                 "font": {"type": "string",
-                         "description": "Nome exato do catálogo 'font'. Omitir usa a "
-                                        "fonte padrão do CapCut, que renderiza "
-                                        "acentuação portuguesa corretamente."},
+                         "description": "Nome exato de uma das 335 fontes do CapCut. "
+                                        "Omitir usa a fonte padrão do app, que "
+                                        "renderiza acentuação portuguesa corretamente "
+                                        "— é a escolha recomendada. Nome inválido "
+                                        "devolve erro com sugestões parecidas."},
                 "font_size": {"type": "number", "minimum": 1, "maximum": 100,
                               "default": _HM.SUBTITLE_FONT_SIZE,
                               "description": "Escala interna do CapCut. 8.0 equivale a "
@@ -648,7 +690,8 @@ TOOLS.update({
             "keep=[[0,5],[12,18]] mantém 0–5s e 12–18s da mídia e produz um vídeo de "
             "11s. Evita calcular timeline_start à mão, que é onde é fácil errar e "
             "perder conteúdo. Devolve também quais trechos da origem foram removidos. "
-            "Para montar fora da ordem da mídia, use capcut.video.add por trecho."
+            "Os trechos são sempre montados na ordem da mídia; para montar fora dessa "
+            "ordem, crie um draft novo com os trechos na ordem desejada."
         ),
         "schema": {
             "type": "object",

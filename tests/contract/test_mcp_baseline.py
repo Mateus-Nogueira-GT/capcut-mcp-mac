@@ -100,18 +100,38 @@ def test_initialize_cai_para_default_se_protocolo_desconhecido():
 
 
 # 2 -------------------------------------------------------------------------
-def test_tools_list_com_schema_estrito(client):
+def test_tools_list_expoe_apenas_o_fluxo(client):
+    """Superfície enxuta: cortar, legendar e texto. Nada além do escopo."""
     tools = client.rpc("tools/list")["result"]["tools"]
     nomes = [t["name"] for t in tools]
     assert nomes == [
-        "capcut.system.doctor", "capcut.draft.create", "capcut.draft.save",
-        "capcut.media.probe", "capcut.catalog.list",
-        "capcut.video.add", "capcut.image.add", "capcut.audio.add", "capcut.text.add",
-        "capcut.subtitle.add", "capcut.video.cut", "capcut.text.add_many",
-        "capcut.draft.validate", "capcut.draft.inspect", "capcut.draft.rebuild"]
+        "capcut.system.doctor", "capcut.media.probe", "capcut.draft.create",
+        "capcut.video.cut", "capcut.subtitle.add", "capcut.text.add",
+        "capcut.text.add_many", "capcut.draft.validate", "capcut.draft.save"]
     for t in tools:
         assert t["inputSchema"]["additionalProperties"] is False, t["name"]
         assert t["description"] and len(t["description"]) > 80, t["name"]
+
+
+def test_nenhuma_descricao_cita_tool_que_nao_existe(client):
+    """Se a descrição manda chamar algo que não está exposto, o agente erra."""
+    import json as _json
+    NOME = re.compile(r"capcut\.[a-z_]+\.[a-z_]+")
+    tools = client.rpc("tools/list")["result"]["tools"]
+    expostas = {t["name"] for t in tools}
+    citadas = set()
+    for t in tools:
+        blob = t["description"] + _json.dumps(t["inputSchema"], ensure_ascii=False)
+        citadas |= set(NOME.findall(blob))
+    assert citadas <= expostas, f"citam tools inexistentes: {sorted(citadas - expostas)}"
+
+
+def test_tool_desabilitada_e_recusada_com_lista_do_que_existe(client):
+    env, is_err = client.call("capcut.image.add", {"draft_id": "x", "source": "y"})
+    assert is_err
+    assert env["error"]["code"] == "OPERATION_NOT_SUPPORTED"
+    assert "capcut.video.cut" in env["error"]["suggestion"]
+    assert "capcut.image.add" not in env["error"]["suggestion"]
 
 
 def test_nenhuma_tool_proibida_e_exposta(client):
