@@ -398,3 +398,134 @@ def replay(script: Any, draft_id: str, plan: list, bus: obs.WarningBus) -> int:
         applier(script, draft_id, step.get("args", {}), bus)
         applied += 1
     return applied
+
+
+# --------------------------------------------------------------- legendas
+# Presets com contraste embutido. Os defaults do upstream são border_width=0.0 e
+# background_alpha=0.0 — ou seja, texto pelado sobre vídeo, ilegível na prática.
+SUBTITLE_PRESETS: Dict[str, Dict[str, Any]] = {
+    "outline": {"border_width": 6.0, "border_color": "#000000",
+                "background_alpha": 0.0},
+    "boxed": {"border_width": 0.0, "background_color": "#000000",
+              "background_alpha": 0.65, "background_round_radius": 12.0},
+    "outline_boxed": {"border_width": 5.0, "border_color": "#000000",
+                      "background_color": "#000000", "background_alpha": 0.45,
+                      "background_round_radius": 12.0},
+    "plain": {},                       # sem contraste: só com escolha explícita
+}
+DEFAULT_SUBTITLE_PRESET = "outline"
+SUBTITLE_FONT_SIZE = 8.0               # ~31 px num canvas 1080x1920 (calibrado na Phase 3)
+TRACK_SUBTITLE = "subtitle"
+
+
+def apply_subtitle(script: Any, draft_id: str, a: Dict[str, Any],
+                   bus: obs.WarningBus) -> Dict[str, Any]:
+    """Cria um segmento de texto por bloco de legenda.
+
+    Não usa `Script_file.import_srt` — ver o docstring de `subtitles.py` para o porquê.
+    Tudo é validado ANTES da primeira mutação, então uma falha não deixa track órfã.
+    """
+    from . import subtitles as SUB
+
+    track = a.get("track") or TRACK_SUBTITLE
+    srt = a.get("srt")
+    segments = a.get("segments")
+    if bool(srt) == bool(segments):
+        raise E.CapcutError(
+            E.MISSING_REQUIRED_PARAM,
+            "Informe exatamente um entre 'srt' e 'segments'.",
+            "'srt' aceita caminho de arquivo, URL ou conteúdo SRT inline; "
+            "'segments' aceita [{start, end, text}].",
+        )
+
+    # ---- 1. carregar e validar tudo antes de tocar no draft
+    if srt:
+        content, origin = SUB.load_source(srt)
+        blocks = SUB.parse_srt(content)
+    else:
+        origin = "segments"
+        blocks = SUB.from_segments(segments)
+    offset = float(a.get("time_offset", 0.0))
+    blocks = SUB.validate_blocks(blocks, offset)
+
+    if script.tracks.get(track) and script.tracks[track].segments:
+        raise E.CapcutError(
+            E.SEGMENT_OVERLAP,
+            f"A track '{track}' já tem legendas.",
+            "Use outra track, ou reconstrua o draft com capcut.draft.rebuild.",
+            track=track,
+        )
+
+    style = dict(SUBTITLE_PRESETS[a.get("style", DEFAULT_SUBTITLE_PRESET)])
+    font_size = float(a.get("font_size", SUBTITLE_FONT_SIZE))
+    font = a.get("font")
+    resolved_font = catalog.resolve("font", font, E.UNKNOWN_FONT) if font else None
+    # fixed_width como o import_srt faz: proporção da largura, conforme a orientação
+    portrait = script.height >= script.width
+    fixed_width = (SUB.FIXED_WIDTH_PORTRAIT if portrait
+                   else SUB.FIXED_WIDTH_LANDSCAPE)
+
+    # ---- 2. mutar
+    from add_text_impl import add_text_impl
+    created = []
+    with bus.capture():
+        for b in blocks:
+            kwargs: Dict[str, Any] = dict(
+                text=b["text"], draft_id=draft_id, track_name=track,
+                start=b["start"], end=b["end"],
+                font_size=font_size,
+                font_color=a.get("font_color", "#FFFFFF"),
+                transform_x=_check_transform("transform_x",
+                                             float(a.get("transform_x", 0.0))),
+                transform_y=_check_transform("transform_y",
+                                             float(a.get("transform_y", -0.8))),
+                align=int(a.get("align", 1)),
+                bold=bool(a.get("bold", False)),
+                line_spacing=float(a.get("line_spacing", 0.25)),
+                fixed_width=fixed_width,
+                **style,
+            )
+            if resolved_font:
+                kwargs["font"] = resolved_font
+            add_text_impl(**kwargs)
+            created.append({"index": b["index"], "start_s": round(b["start"], 3),
+                            "end_s": round(b["end"], 3),
+                            "lines": b["text"].count("\n") + 1})
+
+    imported = len(script.tracks[track].segments)
+    if imported != len(blocks):
+        raise E.CapcutError(
+            E.INTERNAL_ERROR,
+            f"Esperava {len(blocks)} legendas na track mas encontrei {imported}.",
+            "Consulte o log estruturado; nenhum bloco deveria ser perdido.",
+            expected=len(blocks), found=imported,
+        )
+    if abs(float(a.get("transform_y", -0.8))) > 0.85:
+        bus.add("TEXT_UNSAFE_ZONE",
+                "As legendas ficam na borda, onde a interface do sistema pode cobri-las. "
+                "Prefira |transform_y| <= 0.85.")
+    if a.get("style") == "plain":
+        bus.add("TEXT_LOW_CONTRAST",
+                "O preset 'plain' não tem borda nem fundo; sobre vídeo a legenda pode "
+                "ficar ilegível.")
+
+    gaps = sum(1 for p, c in zip(blocks, blocks[1:]) if c["start"] - p["end"] > 0.5)
+    return {
+        "track": track,
+        "blocks_imported": imported,
+        "timeline_start_s": round(blocks[0]["start"], 3),
+        "timeline_end_s": round(blocks[-1]["end"], 3),
+        "source_kind": origin,
+        "first_start_s": round(blocks[0]["start"], 3),
+        "last_end_s": round(blocks[-1]["end"], 3),
+        "time_offset_s": offset,
+        "style": a.get("style", DEFAULT_SUBTITLE_PRESET),
+        "font_size": font_size,
+        "resolved_font": resolved_font,
+        "fixed_width_ratio": fixed_width,
+        "gaps_over_500ms": gaps,
+        "blocks": created,
+    }
+
+
+APPLIERS["subtitle"] = apply_subtitle

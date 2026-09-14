@@ -541,6 +541,74 @@ TOOLS.update({
             "required": ["draft_id", "text"], "additionalProperties": False,
         },
     },
+    "capcut.subtitle.add": {
+        "handler": _media_handler("subtitle"),
+        "title": "Adicionar legendas",
+        "description": (
+            "Importa legendas para uma track própria, criando um segmento de texto por "
+            "bloco. Aceita 'srt' (caminho de arquivo, URL http(s) ou conteúdo SRT "
+            "inline) OU 'segments' com [{start, end, text}] — exatamente um dos dois. "
+            "Os timestamps vêm da entrada; 'time_offset' desloca TODOS os blocos de uma "
+            "vez, que é o único controle temporal disponível. O estilo é uniforme para "
+            "todas as legendas: não há estilo por bloco. O preset default ('outline') "
+            "liga a borda, porque texto sem contraste sobre vídeo fica ilegível. "
+            "Acentuação portuguesa e quebra de linha dentro do bloco são preservadas. "
+            "Todo o conteúdo é validado ANTES de qualquer alteração, então um SRT "
+            "malformado não deixa nada pela metade."
+        ),
+        "schema": {
+            "type": "object",
+            "properties": {
+                "draft_id": {"type": "string"},
+                "srt": {"type": "string",
+                        "description": "Caminho absoluto, URL http(s), ou conteúdo SRT "
+                                       "inline (precisa conter '-->')."},
+                "segments": {
+                    "type": "array", "minItems": 1,
+                    "description": "Alternativa ao SRT: blocos estruturados.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "start": {"type": "number", "minimum": 0,
+                                      "description": "Início em segundos."},
+                            "end": {"type": "number", "minimum": 0,
+                                    "description": "Fim em segundos."},
+                            "text": {"type": "string", "minLength": 1,
+                                     "description": "Aceita \\n para quebrar linha."},
+                        },
+                        "required": ["start", "end", "text"],
+                        "additionalProperties": False,
+                    },
+                },
+                "track": {"type": "string", "default": _HM.TRACK_SUBTITLE},
+                "time_offset": {"type": "number", "default": 0.0,
+                                "description": "Desloca todos os blocos, em segundos. "
+                                               "Positivo atrasa."},
+                "style": {"type": "string",
+                          "enum": sorted(_HM.SUBTITLE_PRESETS),
+                          "default": _HM.DEFAULT_SUBTITLE_PRESET,
+                          "description": "outline = borda preta; boxed = caixa "
+                                         "semitransparente; outline_boxed = os dois; "
+                                         "plain = sem contraste (não recomendado)."},
+                "font": {"type": "string",
+                         "description": "Nome exato do catálogo 'font'. Omitir usa a "
+                                        "fonte padrão do CapCut, que renderiza "
+                                        "acentuação portuguesa corretamente."},
+                "font_size": {"type": "number", "minimum": 1, "maximum": 100,
+                              "default": _HM.SUBTITLE_FONT_SIZE,
+                              "description": "Escala interna do CapCut. 8.0 equivale a "
+                                             "~31 px num canvas 1080x1920."},
+                "font_color": {"type": "string", "default": "#FFFFFF"},
+                "transform_x": {"type": "number", "default": 0.0},
+                "transform_y": {"type": "number", "default": -0.8,
+                                "description": "-0.8 = rodapé. Y positivo é para cima."},
+                "align": {"type": "integer", "enum": [0, 1, 2], "default": 1},
+                "bold": {"type": "boolean", "default": False},
+                "line_spacing": {"type": "number", "default": 0.25},
+            },
+            "required": ["draft_id"], "additionalProperties": False,
+        },
+    },
     "capcut.draft.inspect": {
         "handler": _HD.draft_inspect,
         "title": "Inspecionar o draft",

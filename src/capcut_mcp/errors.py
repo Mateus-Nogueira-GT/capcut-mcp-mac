@@ -25,6 +25,11 @@ UNKNOWN_MASK = "UNKNOWN_MASK"
 UNKNOWN_FONT = "UNKNOWN_FONT"
 UNKNOWN_ANIMATION = "UNKNOWN_ANIMATION"
 UNKNOWN_CATALOG = "UNKNOWN_CATALOG"
+MISSING_FONT = "MISSING_FONT"
+# Legendas
+SRT_PARSE_ERROR = "SRT_PARSE_ERROR"
+SRT_NOT_FOUND = "SRT_NOT_FOUND"
+SRT_FETCH_FAILED = "SRT_FETCH_FAILED"
 # Estado
 DRAFT_NOT_FOUND = "DRAFT_NOT_FOUND"
 DRAFT_EMPTY = "DRAFT_EMPTY"
@@ -53,7 +58,7 @@ UPSTREAM_ERROR = "UPSTREAM_ERROR"
 INTERNAL_ERROR = "INTERNAL_ERROR"
 
 RETRYABLE = {ASSET_FETCH_FAILED, FFPROBE_UNAVAILABLE, DISK_FULL, PERMISSION_DENIED,
-             PROBE_FAILED}
+             PROBE_FAILED, SRT_FETCH_FAILED}
 
 _CJK = re.compile(r"[　-鿿＀-￯]")
 
@@ -96,10 +101,13 @@ def translate(exc: BaseException) -> CapcutError:
             upstream=text,
         )
     if isinstance(exc, NameError) and "font_type" in text:
+        # Rede de segurança: o L1 não usa o import_srt do upstream, então este
+        # NameError não deveria mais ocorrer. Se ocorrer, o erro é acionável.
         return CapcutError(
-            MISSING_REQUIRED_PARAM,
-            "A fonte é obrigatória para legendas nesta versão do upstream.",
-            "Informe 'font' com um nome válido do catálogo.",
+            MISSING_FONT,
+            "A fonte é obrigatória nesta operação do upstream.",
+            "Informe 'font' com um nome válido do catálogo "
+            "(capcut.catalog.list kind='font').",
             upstream=text,
         )
     if isinstance(exc, FileNotFoundError):
