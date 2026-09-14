@@ -307,7 +307,10 @@ _COMMON_VISUAL = {
              "description": "Nome exato do catálogo 'mask' (ex.: Circle, Rectangle)."},
     "transition": {"type": "string",
                    "description": "Nome exato do catálogo 'transition' (ex.: Mix). "
-                                  "Aplicada na junção com o clipe seguinte."},
+                                  "ATENCAO: verificado no CapCut 9.4.1 que a transicao "
+                                  "e gravada no projeto mas NAO e aplicada pelo app — "
+                                  "nao ha icone na juncao nem mistura entre os clipes. "
+                                  "Use apenas se voce for conferir manualmente."},
     "transition_duration": {"type": "number", "default": 0.5,
                             "description": "Duração da transição em segundos."},
 }

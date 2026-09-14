@@ -113,6 +113,12 @@ def apply_video(script: Any, draft_id: str, a: Dict[str, Any],
         vip = catalog.vip_warning("transition", name)
         if vip:
             bus.warnings.append(vip)
+        bus.add("TRANSITION_NOT_RENDERED",
+                f"A transição '{name}' foi gravada no projeto, mas no CapCut 9.4.1 ela "
+                "não é aplicada (verificado: sem ícone na junção e sem mistura entre os "
+                "clipes). Provável causa: o upstream a anexa ao clipe seguinte ao corte, "
+                "quando o CapCut a espera no clipe anterior.",
+                transition=name)
         if kwargs["transition_duration"] >= tl_dur:
             bus.add("TRANSITION_TOO_LONG",
                     f"A transição ({kwargs['transition_duration']}s) é maior ou igual à "
