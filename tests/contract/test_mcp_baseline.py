@@ -100,10 +100,14 @@ def test_initialize_cai_para_default_se_protocolo_desconhecido():
 
 
 # 2 -------------------------------------------------------------------------
-def test_tools_list_tem_exatamente_tres_com_schema_estrito(client):
+def test_tools_list_com_schema_estrito(client):
     tools = client.rpc("tools/list")["result"]["tools"]
-    assert [t["name"] for t in tools] == [
-        "capcut.system.doctor", "capcut.draft.create", "capcut.draft.save"]
+    nomes = [t["name"] for t in tools]
+    assert nomes == [
+        "capcut.system.doctor", "capcut.draft.create", "capcut.draft.save",
+        "capcut.media.probe", "capcut.catalog.list",
+        "capcut.video.add", "capcut.image.add", "capcut.audio.add", "capcut.text.add",
+        "capcut.draft.inspect", "capcut.draft.rebuild"]
     for t in tools:
         assert t["inputSchema"]["additionalProperties"] is False, t["name"]
         assert t["description"] and len(t["description"]) > 80, t["name"]

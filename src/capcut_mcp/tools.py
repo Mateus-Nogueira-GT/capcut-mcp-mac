@@ -167,17 +167,17 @@ def _resolve_script(draft_id: str, entry: Dict[str, Any], bus: obs.WarningBus):
             width=int(canvas.get("width", 1080)), height=int(canvas.get("height", 1920)))
     from .upstream import update_cache
     update_cache(draft_id, script)                     # re-liga ao id original
-    steps = [s for s in entry.get("plan", []) if s.get("op") != "create"]
+
+    from . import handlers_media as HM
+    plan = entry.get("plan", [])
+    steps = [s for s in plan if s.get("op") != "create"]
     if steps:
-        raise E.CapcutError(
-            E.OPERATION_NOT_SUPPORTED,
-            f"O draft '{draft_id}' tem {len(steps)} passo(s) de mídia e o processo do "
-            "servidor foi reiniciado; o replay desses passos entra na Phase 3.",
-            "Recrie o draft e refaça as adições nesta sessão.",
-            draft_id=draft_id, pending_steps=len(steps),
-        )
+        # o replay usa os mesmos appliers, então o resultado é idêntico ao original;
+        # o plano já está registrado, por isso não re-registramos nada aqui.
+        HM.replay(script, draft_id, plan, bus)
     bus.add("DRAFT_REPLAYED",
-            "O servidor havia reiniciado; o draft foi reconstruído pelo plano registrado.")
+            f"O servidor havia reiniciado; o draft foi reconstruído pelo plano "
+            f"registrado ({len(steps)} passo(s) de mídia).")
     return script
 
 
@@ -266,3 +266,314 @@ def tool_list() -> list:
          "inputSchema": spec["schema"]}
         for name, spec in TOOLS.items()
     ]
+
+
+# ==========================================================================
+# Phase 3 — edição da timeline. As tools de mídia compartilham o mesmo ciclo:
+# resolver o script (com replay se o processo reiniciou) -> aplicar -> registrar
+# o passo no plano declarativo.
+# ==========================================================================
+from . import catalog as _catalog              # noqa: E402
+from . import handlers_draft as _HD            # noqa: E402
+from . import handlers_media as _HM            # noqa: E402
+
+
+def _media_handler(op: str) -> Handler:
+    def handler(args: Dict[str, Any], bus: obs.WarningBus) -> Dict[str, Any]:
+        draft_id = args["draft_id"]
+        entry = registry.get(draft_id)
+        script = _resolve_script(draft_id, entry, bus)
+        info = _HM.APPLIERS[op](script, draft_id, args, bus)
+        _HM.record(draft_id, op, args, info)
+        return {"draft_id": draft_id, **info}
+    return handler
+
+
+_TIME_NOTE = ("Entrada em segundos; a saída traz também µs, a unidade interna do "
+              "CapCut. Omitir timeline_start ANEXA ao fim da track — a forma segura de "
+              "encadear clipes.")
+_TRANSFORM_NOTE = ("transform_x/transform_y são normalizados em 'meia tela': 0 é o "
+                   "centro, 1.0 desloca meia largura/altura. Y POSITIVO move para CIMA.")
+
+_COMMON_VISUAL = {
+    "scale_x": {"type": "number", "default": 1.0, "description": "Escala horizontal."},
+    "scale_y": {"type": "number", "default": 1.0, "description": "Escala vertical."},
+    "transform_x": {"type": "number", "default": 0.0, "description": _TRANSFORM_NOTE},
+    "transform_y": {"type": "number", "default": 0.0, "description": _TRANSFORM_NOTE},
+    "layer": {"type": "integer", "default": 0,
+              "description": "Camada relativa entre tracks do mesmo tipo; maior fica "
+                             "na frente. Use para picture-in-picture."},
+    "mask": {"type": "string",
+             "description": "Nome exato do catálogo 'mask' (ex.: Circle, Rectangle)."},
+    "transition": {"type": "string",
+                   "description": "Nome exato do catálogo 'transition' (ex.: Mix). "
+                                  "Aplicada na junção com o clipe seguinte."},
+    "transition_duration": {"type": "number", "default": 0.5,
+                            "description": "Duração da transição em segundos."},
+}
+
+TOOLS.update({
+    "capcut.media.probe": {
+        "handler": _HD.media_probe,
+        "title": "Inspecionar mídia",
+        "description": (
+            "Lê duração, dimensões, codec e container reais de arquivos ou URLs, via "
+            "ffprobe, em lote e com cache de sessão. CHAME ISTO ANTES de montar a "
+            "timeline: sem duração conhecida não é possível calcular posições, e "
+            "segmentos podem colidir. Também informa se a extensão do arquivo "
+            "corresponde ao conteúdo real."
+        ),
+        "schema": {
+            "type": "object",
+            "properties": {
+                "sources": {"type": "array", "items": {"type": "string"}, "minItems": 1,
+                            "description": "Caminhos absolutos ou URLs http(s)."},
+                "refresh": {"type": "boolean", "default": False,
+                            "description": "Ignora o cache da sessão."},
+            },
+            "required": ["sources"], "additionalProperties": False,
+        },
+    },
+    "capcut.catalog.list": {
+        "handler": _HD.catalog_list,
+        "title": "Listar catálogos do CapCut",
+        "description": (
+            "Lista os nomes válidos de transições, máscaras, fontes, animações, efeitos, "
+            "filtros e propriedades de keyframe, direto dos metadados do CapCut. "
+            "Os nomes exigem correspondência EXATA e case-sensitive: 'fade_in' não "
+            "existe, 'Fade_In' sim. Use 'search' para filtrar — alguns catálogos têm "
+            "centenas de itens. O campo 'applicable' indica se esta versão consegue "
+            "aplicar o recurso."
+        ),
+        "schema": {
+            "type": "object",
+            "properties": {
+                "kind": {"type": "string", "enum": _catalog.KINDS,
+                         "description": "Qual catálogo listar."},
+                "search": {"type": "string",
+                           "description": "Filtro por substring, case-insensitive."},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 200, "default": 50},
+                "offset": {"type": "integer", "minimum": 0, "default": 0},
+            },
+            "required": ["kind"], "additionalProperties": False,
+        },
+    },
+    "capcut.video.add": {
+        "handler": _media_handler("video"),
+        "title": "Adicionar vídeo",
+        "description": (
+            "Acrescenta um clipe de vídeo à timeline, com corte na inserção, "
+            "velocidade, volume, escala, posição, máscara, blur de fundo e transição. "
+            f"{_TIME_NOTE} O corte é feito NA INSERÇÃO (source_start/source_end); não "
+            "existe edição de um segmento já adicionado — para mudar, use "
+            "capcut.draft.rebuild. Colisão na mesma track é erro; para sobrepor "
+            "visualmente use outra track com 'layer'."
+        ),
+        "schema": {
+            "type": "object",
+            "properties": {
+                "draft_id": {"type": "string"},
+                "source": {"type": "string",
+                           "description": "Caminho absoluto ou URL http(s) do vídeo."},
+                "track": {"type": "string", "default": _HM.TRACK_VIDEO,
+                          "description": "Track de destino. Clipes na mesma track ficam "
+                                         "em sequência; tracks distintas se sobrepõem."},
+                "timeline_start": {"type": "number", "minimum": 0,
+                                   "description": "Posição na timeline, em segundos. "
+                                                  "Omitir anexa ao fim da track."},
+                "source_start": {"type": "number", "minimum": 0, "default": 0,
+                                 "description": "Início do corte DENTRO da mídia."},
+                "source_end": {"type": "number",
+                               "description": "Fim do corte dentro da mídia. Omitir usa "
+                                              "até o fim do arquivo."},
+                "duration": {"type": "number",
+                             "description": "Alternativa a source_end: quantos segundos "
+                                            "a partir de source_start."},
+                "speed": {"type": "number", "default": 1.0,
+                          "description": "1.0 = original. Afeta a duração na timeline."},
+                "volume": {"type": "number", "minimum": 0, "maximum": 2, "default": 1.0,
+                           "description": "1.0 = original, 0.0 = mudo."},
+                "background_blur": {"type": "integer", "enum": [1, 2, 3, 4],
+                                    "description": "Blur do fundo: 1 leve a 4 máximo."},
+                **_COMMON_VISUAL,
+            },
+            "required": ["draft_id", "source"], "additionalProperties": False,
+        },
+    },
+    "capcut.image.add": {
+        "handler": _media_handler("image"),
+        "title": "Adicionar imagem",
+        "description": (
+            "Acrescenta uma imagem à timeline como segmento de vídeo, com duração "
+            "própria, escala, posição, máscara, transição e animações de entrada, "
+            f"saída e combo. {_TIME_NOTE} Para picture-in-picture, use uma track "
+            "diferente da do vídeo principal e ajuste scale/transform."
+        ),
+        "schema": {
+            "type": "object",
+            "properties": {
+                "draft_id": {"type": "string"},
+                "source": {"type": "string",
+                           "description": "Caminho absoluto ou URL http(s) da imagem."},
+                "track": {"type": "string", "default": _HM.TRACK_VIDEO},
+                "timeline_start": {"type": "number", "minimum": 0,
+                                   "description": "Omitir anexa ao fim da track."},
+                "duration": {"type": "number", "default": 3.0,
+                             "description": "Quanto tempo a imagem fica na tela."},
+                "intro_animation": {"type": "string",
+                                    "description": "Nome do catálogo 'animation_intro'."},
+                "outro_animation": {"type": "string",
+                                    "description": "Nome do catálogo 'animation_outro'."},
+                "combo_animation": {"type": "string",
+                                    "description": "Nome do catálogo 'animation_combo'."},
+                **_COMMON_VISUAL,
+            },
+            "required": ["draft_id", "source"], "additionalProperties": False,
+        },
+    },
+    "capcut.audio.add": {
+        "handler": _media_handler("audio"),
+        "title": "Adicionar áudio",
+        "description": (
+            "Acrescenta áudio à timeline. Use role='music' para trilha de fundo (volume "
+            "default 0.25, track 'audio_main') ou role='voice' para narração (volume "
+            f"1.0, track própria). {_TIME_NOTE} NÃO existe fade in/out nesta versão: o "
+            "upstream não expõe o parâmetro, e pedi-lo devolve um aviso."
+        ),
+        "schema": {
+            "type": "object",
+            "properties": {
+                "draft_id": {"type": "string"},
+                "source": {"type": "string",
+                           "description": "Caminho absoluto ou URL http(s) do áudio."},
+                "role": {"type": "string", "enum": ["music", "voice", "sfx"],
+                         "default": "music",
+                         "description": "Define track e volume default."},
+                "track": {"type": "string",
+                          "description": "Sobrescreve a track derivada de 'role'."},
+                "timeline_start": {"type": "number", "minimum": 0,
+                                   "description": "Omitir anexa ao fim da track."},
+                "source_start": {"type": "number", "minimum": 0, "default": 0},
+                "source_end": {"type": "number"},
+                "duration": {"type": "number"},
+                "speed": {"type": "number", "default": 1.0},
+                "volume": {"type": "number", "minimum": 0, "maximum": 2,
+                           "description": "Default 0.25 para music, 1.0 para voice/sfx."},
+            },
+            "required": ["draft_id", "source"], "additionalProperties": False,
+        },
+    },
+    "capcut.text.add": {
+        "handler": _media_handler("text"),
+        "title": "Adicionar texto",
+        "description": (
+            "Acrescenta um texto à timeline, com fonte, cor, borda, fundo, sombra, "
+            "alinhamento, espaçamento, animações de entrada/saída e estilos por faixa "
+            "de caracteres. ATENÇÃO ao tamanho: font_size está na escala interna do "
+            f"CapCut, aproximadamente 3–20, e {_HM.FONT_SIZE_DEFAULT} é o tamanho "
+            "padrão do app — não são pontos nem pixels. "
+            f"{_TIME_NOTE} {_TRANSFORM_NOTE} Animação de loop não é aplicável."
+        ),
+        "schema": {
+            "type": "object",
+            "properties": {
+                "draft_id": {"type": "string"},
+                "text": {"type": "string", "minLength": 1,
+                         "description": "Conteúdo. Aceita acentuação e quebras de linha."},
+                "track": {"type": "string", "default": _HM.TRACK_TEXT},
+                "timeline_start": {"type": "number", "minimum": 0,
+                                   "description": "Omitir anexa ao fim da track."},
+                "duration": {"type": "number", "default": 3.0},
+                "font": {"type": "string",
+                         "description": "Nome exato do catálogo 'font' (335 opções)."},
+                "font_size": {"type": "number", "minimum": 1, "maximum": 100,
+                              "default": _HM.FONT_SIZE_DEFAULT,
+                              "description": "Escala interna do CapCut (~3–20), não pt."},
+                "font_color": {"type": "string", "default": "#FFFFFF",
+                               "description": "Hex #RGB ou #RRGGBB."},
+                "transform_x": {"type": "number", "default": 0.0,
+                                "description": _TRANSFORM_NOTE},
+                "transform_y": {"type": "number", "default": -0.8,
+                                "description": "Default -0.8 = rodapé. " + _TRANSFORM_NOTE},
+                "bold": {"type": "boolean", "default": False},
+                "italic": {"type": "boolean", "default": False},
+                "underline": {"type": "boolean", "default": False},
+                "align": {"type": "integer", "enum": [0, 1, 2], "default": 1,
+                          "description": "0 esquerda, 1 centro, 2 direita."},
+                "line_spacing": {"type": "number", "default": 0.25},
+                "letter_spacing": {"type": "number", "default": 0.0},
+                "border_color": {"type": "string"},
+                "border_width": {"type": "number",
+                                 "description": "> 0 liga a borda. Melhora legibilidade "
+                                                "sobre vídeo."},
+                "background_color": {"type": "string"},
+                "background_alpha": {"type": "number", "minimum": 0, "maximum": 1,
+                                     "description": "> 0 liga o fundo."},
+                "background_round_radius": {"type": "number"},
+                "shadow_enabled": {"type": "boolean"},
+                "intro_animation": {"type": "string",
+                                    "description": "Nome do catálogo 'text_intro'."},
+                "outro_animation": {"type": "string",
+                                    "description": "Nome do catálogo 'text_outro'."},
+                "text_styles": {
+                    "type": "array",
+                    "description": "Estilos por faixa de caracteres, sem sobreposição.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "start": {"type": "integer", "minimum": 0},
+                            "end": {"type": "integer", "minimum": 1},
+                            "font_size": {"type": "number"},
+                            "font_color": {"type": "string"},
+                            "bold": {"type": "boolean"},
+                            "italic": {"type": "boolean"},
+                            "underline": {"type": "boolean"},
+                            "font": {"type": "string",
+                                     "description": "Fonte só desta faixa."},
+                        },
+                        "required": ["start", "end"], "additionalProperties": False,
+                    },
+                },
+            },
+            "required": ["draft_id", "text"], "additionalProperties": False,
+        },
+    },
+    "capcut.draft.inspect": {
+        "handler": _HD.draft_inspect,
+        "title": "Inspecionar o draft",
+        "description": (
+            "Mostra o estado real do draft: tracks, segmentos com índice e tempos, "
+            "duração total, tracks vazias, lacunas e keyframes pendentes. Use para "
+            "verificar o que foi construído ANTES de salvar, e para descobrir os "
+            "índices que capcut.draft.rebuild usa."
+        ),
+        "schema": {
+            "type": "object",
+            "properties": {"draft_id": {"type": "string"}},
+            "required": ["draft_id"], "additionalProperties": False,
+        },
+    },
+    "capcut.draft.rebuild": {
+        "handler": _HD.draft_rebuild,
+        "title": "Reconstruir o draft em outra ordem",
+        "description": (
+            "Recria o draft aplicando uma nova ordem aos passos já registrados. É assim "
+            "que se REORDENA conteúdo: não existe API de mover ou remover segmento em "
+            "nenhuma camada, então reordenar significa reconstruir. Passe 'order' como "
+            "permutação dos índices dos passos (veja capcut.draft.inspect). Por default "
+            "os tempos são recalculados em cadeia."
+        ),
+        "schema": {
+            "type": "object",
+            "properties": {
+                "draft_id": {"type": "string"},
+                "order": {"type": "array", "items": {"type": "integer", "minimum": 0},
+                          "description": "Permutação dos índices dos passos de mídia."},
+                "recompute_timeline": {"type": "boolean", "default": True,
+                                       "description": "Recalcula timeline_start em "
+                                                      "sequência, ignorando os originais."},
+            },
+            "required": ["draft_id"], "additionalProperties": False,
+        },
+    },
+})
