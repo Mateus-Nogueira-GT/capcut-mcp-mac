@@ -1,0 +1,3 @@
+[submodule "vendor/VectCutAPI"]
+	path = vendor/VectCutAPI
+	url = https://github.com/sun-guannan/VectCutAPI.git
