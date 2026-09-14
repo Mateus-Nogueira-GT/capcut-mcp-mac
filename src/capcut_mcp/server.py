@@ -29,10 +29,25 @@ SUPPORTED_PROTOCOLS = ("2025-06-18", "2025-03-26", "2024-11-05")
 DEFAULT_PROTOCOL = "2024-11-05"
 
 INSTRUCTIONS = (
-    "Gera projetos do CapCut Desktop no macOS. Fluxo: capcut.draft.create -> "
-    "capcut.draft.save. Depois do save, volte à página inicial do CapCut para ele reler "
-    "o disco. Tempos de entrada em segundos; a saída também traz microssegundos (µs), "
-    "que é a unidade interna do CapCut. Se algo falhar, chame capcut.system.doctor."
+    "Gera projetos do CapCut Desktop no macOS: corta vídeo, coloca legendas e coloca "
+    "textos em momentos pré-determinados.\n\n"
+    "FLUXO RECOMENDADO:\n"
+    "  1. capcut.media.probe(sources=[...])  — descubra a duração real antes de montar\n"
+    "  2. capcut.draft.create(name, 1080, 1920)\n"
+    "  3. capcut.video.cut(source, keep=[[0,5],[12,18]])  — trechos que FICAM\n"
+    "  4. capcut.subtitle.add(srt=...) ou (segments=[{start,end,text}])\n"
+    "  5. capcut.text.add_many(items=[{text,timeline_start,duration}])\n"
+    "  6. capcut.draft.validate(draft_id)  — confira antes de gravar\n"
+    "  7. capcut.draft.save(draft_id)\n"
+    "  8. No CapCut, volte à página inicial para ele reler o disco.\n\n"
+    "UNIDADES: entrada em segundos; a saída traz também µs, a unidade interna do "
+    "CapCut. font_size está na escala interna do app (~3-20), não em pontos: 15 é o "
+    "tamanho de um título, 8 o de uma legenda. transform_x/y são normalizados em "
+    "'meia tela', e Y POSITIVO é para CIMA.\n\n"
+    "NÃO EXISTE: editar um segmento já adicionado (use capcut.draft.rebuild), "
+    "renderizar vídeo, recarregar o CapCut automaticamente. Transição é gravada mas o "
+    "app não a aplica.\n\n"
+    "Se algo falhar, chame capcut.system.doctor."
 )
 
 

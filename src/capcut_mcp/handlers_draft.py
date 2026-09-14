@@ -170,3 +170,31 @@ def draft_rebuild(a: Dict[str, Any], bus: obs.WarningBus) -> Dict[str, Any]:
         "note": "O draft foi reconstruído em memória. Chame capcut.draft.save para "
                 "gravar; use overwrite=true se o projeto já existir em disco.",
     }
+
+
+# --------------------------------------------------------- draft.validate
+def draft_validate(a: Dict[str, Any], bus: obs.WarningBus) -> Dict[str, Any]:
+    from . import validator as V
+
+    draft_id = a.get("draft_id")
+    entry = registry.get(draft_id)
+    script = DRAFT_CACHE.get(draft_id)
+    if script is None:
+        raise E.CapcutError(
+            E.DRAFT_NOT_FOUND,
+            f"O draft '{draft_id}' não está na memória deste processo.",
+            "Recrie o draft nesta sessão, ou chame capcut.draft.save, que o "
+            "reconstrói pelo plano registrado antes de validar.",
+            draft_id=draft_id)
+
+    report = V.validate(script, entry)
+    order = {V.ERROR: 0, V.WARNING: 1, V.INFO: 2}
+    floor = order[a.get("min_severity", V.INFO)]
+    report["issues"] = [i for i in report["issues"] if order[i["severity"]] <= floor]
+    report["draft_id"] = draft_id
+    if not report["ok"]:
+        bus.add("VALIDATION_FAILED",
+                f"{report['counts'][V.ERROR]} erro(s) impedem o save.",
+                codes=[i["code"] for i in report["issues"]
+                       if i["severity"] == V.ERROR])
+    return report

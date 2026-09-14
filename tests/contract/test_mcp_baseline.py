@@ -107,7 +107,8 @@ def test_tools_list_com_schema_estrito(client):
         "capcut.system.doctor", "capcut.draft.create", "capcut.draft.save",
         "capcut.media.probe", "capcut.catalog.list",
         "capcut.video.add", "capcut.image.add", "capcut.audio.add", "capcut.text.add",
-        "capcut.subtitle.add", "capcut.draft.inspect", "capcut.draft.rebuild"]
+        "capcut.subtitle.add", "capcut.video.cut", "capcut.text.add_many",
+        "capcut.draft.validate", "capcut.draft.inspect", "capcut.draft.rebuild"]
     for t in tools:
         assert t["inputSchema"]["additionalProperties"] is False, t["name"]
         assert t["description"] and len(t["description"]) > 80, t["name"]

@@ -547,3 +547,159 @@ def apply_subtitle(script: Any, draft_id: str, a: Dict[str, Any],
 
 
 APPLIERS["subtitle"] = apply_subtitle
+
+
+# ------------------------------------------------- cortar por trechos mantidos
+def apply_cut(script: Any, draft_id: str, a: Dict[str, Any],
+              bus: obs.WarningBus) -> Dict[str, Any]:
+    """Corta um vídeo mantendo apenas os trechos pedidos, em sequência.
+
+    Mapeia direto o modelo mental de "cortar nos momentos X": em vez de N chamadas
+    com `timeline_start` calculado à mão — que é onde a auditoria viu segmentos
+    serem perdidos — o agente declara os trechos que ficam e o L1 os encadeia.
+    """
+    keep = a.get("keep") or []
+    if not keep:
+        raise E.CapcutError(
+            E.MISSING_REQUIRED_PARAM, "Informe 'keep' com os trechos a manter.",
+            "Formato: keep=[[0, 5], [12, 18]] — pares [início, fim] em segundos "
+            "dentro da mídia de origem.")
+
+    probe = media.probe(a["source"])
+    if probe["kind"] != "video":
+        raise E.CapcutError(
+            E.UNSUPPORTED_FORMAT, f"{a['source']} é '{probe['kind']}', não vídeo.",
+            "Use capcut.image.add ou capcut.audio.add.")
+
+    ranges = []
+    for i, pair in enumerate(keep):
+        if not isinstance(pair, (list, tuple)) or len(pair) != 2:
+            raise E.CapcutError(
+                E.MISSING_REQUIRED_PARAM,
+                f"keep[{i}] deveria ser um par [início, fim], veio {pair!r}.",
+                "Formato: keep=[[0, 5], [12, 18]].")
+        ranges.append((float(pair[0]), float(pair[1])))
+
+    ordered = sorted(ranges)
+    if ordered != ranges:
+        bus.add("CUTS_REORDERED",
+                "Os trechos de 'keep' não estavam em ordem crescente e foram ordenados. "
+                "Para montar fora da ordem da mídia, use capcut.video.add por trecho.",
+                original=ranges, ordered=ordered)
+    for (a0, a1), (b0, _b1) in zip(ordered, ordered[1:]):
+        if b0 < a1 - 1e-6:
+            raise E.CapcutError(
+                E.INVALID_TIMERANGE,
+                f"Os trechos [{a0}, {a1}] e [{b0}, ...] se sobrepõem na mídia.",
+                "Trechos a manter não podem se sobrepor.")
+
+    speed = float(a.get("speed", 1.0))
+    track = a.get("track") or TRACK_VIDEO
+    gap = float(a.get("gap", 0.0))
+    if gap < 0:
+        raise E.CapcutError(E.INVALID_TIMERANGE, f"gap negativo: {gap}",
+                            "Use 0 para cortes encadeados sem buraco.")
+
+    timeline_start = a.get("timeline_start")
+    cursor = (media.track_end(script, track) if timeline_start is None
+              else float(timeline_start))
+    shared = {k: v for k, v in a.items()
+              if k in ("volume", "scale_x", "scale_y", "transform_x", "transform_y",
+                       "layer", "mask", "background_blur")}
+
+    created = []
+    for idx, (src_start, src_end) in enumerate(ordered):
+        info = apply_video(script, draft_id, dict(
+            shared, source=a["source"], track=track, speed=speed,
+            source_start=src_start, source_end=src_end, timeline_start=cursor), bus)
+        created.append({"index": idx, "source_range_s": [src_start, src_end],
+                        "timeline_start_s": info["timeline_start_s"],
+                        "timeline_end_s": info["timeline_end_s"]})
+        cursor = info["timeline_end_s"] + gap
+
+    removed = []
+    prev_end = 0.0
+    for src_start, src_end in ordered:
+        if src_start > prev_end + 1e-6:
+            removed.append([round(prev_end, 3), round(src_start, 3)])
+        prev_end = src_end
+    if probe["duration_s"] and probe["duration_s"] > prev_end + 1e-6:
+        removed.append([round(prev_end, 3), round(probe["duration_s"], 3)])
+
+    return {
+        "track": track,
+        "kind": "cut",
+        "segments_created": len(created),
+        "timeline_start_s": created[0]["timeline_start_s"],
+        "timeline_end_s": created[-1]["timeline_end_s"],
+        "total_duration_s": round(created[-1]["timeline_end_s"]
+                                  - created[0]["timeline_start_s"], 3),
+        "media_duration_s": probe["duration_s"],
+        "kept": created,
+        "removed_from_source_s": removed,
+        "gap_s": gap,
+    }
+
+
+# --------------------------------------------- vários textos em uma chamada
+def apply_text_batch(script: Any, draft_id: str, a: Dict[str, Any],
+                     bus: obs.WarningBus) -> Dict[str, Any]:
+    """Coloca vários textos em momentos pré-determinados, com estilo compartilhado.
+
+    Os parâmetros de estilo do nível de cima valem para todos; cada item traz apenas
+    o conteúdo e o tempo. Tudo é validado antes da primeira mutação.
+    """
+    items = a.get("items") or []
+    if not items:
+        raise E.CapcutError(
+            E.MISSING_REQUIRED_PARAM, "Informe 'items' com os textos.",
+            'Formato: items=[{"text": "...", "timeline_start": 0, "duration": 2}]')
+
+    style = {k: v for k, v in a.items()
+             if k not in ("items", "draft_id", "track")}
+    track = a.get("track") or TRACK_TEXT
+
+    planned = []
+    for i, it in enumerate(items):
+        if not str(it.get("text", "")).strip():
+            raise E.CapcutError(
+                E.MISSING_REQUIRED_PARAM, f"items[{i}] precisa de 'text' não vazio.",
+                'Formato: {"text": "...", "timeline_start": 0, "duration": 2}',
+                item=i)
+        start = it.get("timeline_start")
+        if start is None:
+            raise E.CapcutError(
+                E.MISSING_REQUIRED_PARAM,
+                f"items[{i}] precisa de 'timeline_start'.",
+                "Este é o momento pré-determinado em que o texto aparece, em segundos.",
+                item=i)
+        planned.append({"text": str(it["text"]), "start": float(start),
+                        "duration": float(it.get("duration", a.get("duration", 3.0)))})
+    planned.sort(key=lambda p: p["start"])
+    for prev, cur in zip(planned, planned[1:]):
+        if cur["start"] < prev["start"] + prev["duration"] - 1e-6:
+            raise E.CapcutError(
+                E.SEGMENT_OVERLAP,
+                f"Os textos em {prev['start']}s e {cur['start']}s se sobrepõem na "
+                f"track '{track}'.",
+                "Ajuste os tempos, ou distribua em tracks diferentes.")
+
+    created = []
+    for p in planned:
+        info = apply_text(script, draft_id, dict(
+            style, text=p["text"], track=track,
+            timeline_start=p["start"], duration=p["duration"]), bus)
+        created.append({"text": p["text"][:40], "start_s": info["timeline_start_s"],
+                        "end_s": info["timeline_end_s"]})
+    return {
+        "track": track,
+        "kind": "text_batch",
+        "texts_created": len(created),
+        "timeline_start_s": created[0]["start_s"],
+        "timeline_end_s": created[-1]["end_s"],
+        "texts": created,
+    }
+
+
+APPLIERS["cut"] = apply_cut
+APPLIERS["text_batch"] = apply_text_batch

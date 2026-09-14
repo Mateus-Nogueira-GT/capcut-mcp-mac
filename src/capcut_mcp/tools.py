@@ -149,8 +149,29 @@ def draft_save(args: Dict[str, Any], bus: obs.WarningBus) -> Dict[str, Any]:
             draft_id=draft_id,
         )
 
+    # --- validação pré-save (spec: Validation). Erro bloqueia, salvo com force=true.
+    from . import validator as V
+    report = V.validate(script, entry)
+    erros = [i for i in report["issues"] if i["severity"] == V.ERROR]
+    if args.get("allow_empty"):
+        # quem pediu allow_empty já sabe que o draft está vazio
+        erros = [i for i in erros if i["code"] != "V_EMPTY_DRAFT"]
+    if erros and not args.get("force", False):
+        raise E.CapcutError(
+            E.VALIDATION_FAILED,
+            f"{len(erros)} problema(s) impedem o save: "
+            + "; ".join(i["message"] for i in erros[:3]),
+            "Corrija os itens listados, ou passe force=true para salvar mesmo assim. "
+            "Use capcut.draft.validate para ver o relatório completo.",
+            issues=erros,
+        )
+    for issue in report["issues"]:
+        if issue["severity"] != V.ERROR:
+            bus.add(issue["code"], issue["message"], **issue.get("context", {}))
+
     result = deployer.save(script, draft_id, project_name, inst,
                            overwrite=bool(args.get("overwrite", False)), bus=bus)
+    result["validation"] = {"counts": report["counts"], "forced": bool(erros)}
     registry.mark_saved(draft_id, result["project_path"])
     result["draft_id"] = draft_id
     result["segments"] = segments
@@ -231,8 +252,10 @@ TOOLS: Dict[str, Dict[str, Any]] = {
         "handler": draft_save,
         "title": "Salvar projeto no CapCut",
         "description": (
-            "Grava o draft como projeto no diretório real do CapCut no macOS, no formato "
-            "multi-timeline que a versão instalada exige, com os metadados reescritos. "
+            "Valida o draft e grava como projeto no diretório real do CapCut no macOS, "
+            "no formato multi-timeline que a versão instalada exige, com os metadados "
+            "reescritos. Recusa se a validação encontrar erro — passe force=true para "
+            "salvar mesmo assim. "
             "Devolve o caminho e um manifest do que foi escrito. "
             "Depois de salvar, o CapCut precisa reler o disco: volte à página inicial do "
             "app (ou reinicie-o) para o projeto aparecer. Um projeto aberto no editor "
@@ -252,6 +275,9 @@ TOOLS: Dict[str, Dict[str, Any]] = {
                 "allow_empty": {"type": "boolean", "default": False,
                                 "description": "Permite salvar um draft sem nenhum "
                                                "segmento (só para testar o caminho)."},
+                "force": {"type": "boolean", "default": False,
+                          "description": "Salva mesmo com erros de validação. Use só "
+                                         "depois de ver o relatório e decidir."},
             },
             "required": ["draft_id"],
             "additionalProperties": False,
@@ -609,6 +635,127 @@ TOOLS.update({
                                        "description": "Limite por linha antes de quebrar "
                                                       "em limite de palavra. Omitir "
                                                       "calcula pelo font_size."},
+            },
+            "required": ["draft_id"], "additionalProperties": False,
+        },
+    },
+    "capcut.video.cut": {
+        "handler": _media_handler("cut"),
+        "title": "Cortar vídeo mantendo trechos",
+        "description": (
+            "Corta um vídeo declarando os trechos que FICAM, e os encadeia na timeline "
+            "em sequência, sem buraco. É a forma direta de 'cortar nos momentos X': "
+            "keep=[[0,5],[12,18]] mantém 0–5s e 12–18s da mídia e produz um vídeo de "
+            "11s. Evita calcular timeline_start à mão, que é onde é fácil errar e "
+            "perder conteúdo. Devolve também quais trechos da origem foram removidos. "
+            "Para montar fora da ordem da mídia, use capcut.video.add por trecho."
+        ),
+        "schema": {
+            "type": "object",
+            "properties": {
+                "draft_id": {"type": "string"},
+                "source": {"type": "string",
+                           "description": "Caminho absoluto ou URL http(s) do vídeo."},
+                "keep": {
+                    "type": "array", "minItems": 1,
+                    "description": "Trechos a manter, em segundos DENTRO da mídia: "
+                                   "[[inicio, fim], ...]. Não podem se sobrepor.",
+                    "items": {"type": "array", "minItems": 2, "maxItems": 2,
+                              "items": {"type": "number", "minimum": 0}},
+                },
+                "track": {"type": "string", "default": _HM.TRACK_VIDEO},
+                "timeline_start": {"type": "number", "minimum": 0,
+                                   "description": "Onde o primeiro trecho entra. "
+                                                  "Omitir anexa ao fim da track."},
+                "gap": {"type": "number", "minimum": 0, "default": 0.0,
+                        "description": "Segundos entre os trechos. 0 = encadeado."},
+                "speed": {"type": "number", "default": 1.0},
+                "volume": {"type": "number", "minimum": 0, "maximum": 2, "default": 1.0},
+                "scale_x": {"type": "number", "default": 1.0},
+                "scale_y": {"type": "number", "default": 1.0},
+                "transform_x": {"type": "number", "default": 0.0},
+                "transform_y": {"type": "number", "default": 0.0},
+                "layer": {"type": "integer", "default": 0},
+                "mask": {"type": "string"},
+                "background_blur": {"type": "integer", "enum": [1, 2, 3, 4]},
+            },
+            "required": ["draft_id", "source", "keep"], "additionalProperties": False,
+        },
+    },
+    "capcut.text.add_many": {
+        "handler": _media_handler("text_batch"),
+        "title": "Adicionar vários textos",
+        "description": (
+            "Coloca vários textos em momentos pré-determinados numa única chamada, com "
+            "estilo compartilhado. Cada item traz só conteúdo e tempo; fonte, tamanho, "
+            "cor, borda, fundo e posição vêm do nível de cima e valem para todos. "
+            "Sobreposição entre os textos é recusada antes de qualquer alteração. "
+            "Para um texto só, ou para estilos diferentes por texto, use capcut.text.add."
+        ),
+        "schema": {
+            "type": "object",
+            "properties": {
+                "draft_id": {"type": "string"},
+                "items": {
+                    "type": "array", "minItems": 1,
+                    "description": "Os textos e seus momentos.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "text": {"type": "string", "minLength": 1},
+                            "timeline_start": {"type": "number", "minimum": 0,
+                                               "description": "Momento em que aparece."},
+                            "duration": {"type": "number",
+                                         "description": "Quanto tempo fica. Omitir usa "
+                                                        "o 'duration' do nível de cima."},
+                        },
+                        "required": ["text", "timeline_start"],
+                        "additionalProperties": False,
+                    },
+                },
+                "track": {"type": "string", "default": _HM.TRACK_TEXT},
+                "duration": {"type": "number", "default": 3.0,
+                             "description": "Duração default de cada texto."},
+                "font": {"type": "string"},
+                "font_size": {"type": "number", "minimum": 1, "maximum": 100,
+                              "default": _HM.FONT_SIZE_DEFAULT,
+                              "description": "Escala interna do CapCut (~3-20)."},
+                "font_color": {"type": "string", "default": "#FFFFFF"},
+                "transform_x": {"type": "number", "default": 0.0},
+                "transform_y": {"type": "number", "default": 0.0},
+                "bold": {"type": "boolean", "default": False},
+                "italic": {"type": "boolean", "default": False},
+                "align": {"type": "integer", "enum": [0, 1, 2], "default": 1},
+                "border_color": {"type": "string"},
+                "border_width": {"type": "number"},
+                "background_color": {"type": "string"},
+                "background_alpha": {"type": "number", "minimum": 0, "maximum": 1},
+                "background_round_radius": {"type": "number"},
+                "shadow_enabled": {"type": "boolean"},
+                "intro_animation": {"type": "string"},
+                "outro_animation": {"type": "string"},
+            },
+            "required": ["draft_id", "items"], "additionalProperties": False,
+        },
+    },
+    "capcut.draft.validate": {
+        "handler": _HD.draft_validate,
+        "title": "Validar o draft antes de salvar",
+        "description": (
+            "Confere o draft e devolve os problemas encontrados, por severidade. "
+            "Pega o que este fluxo erra na prática: texto que começa depois de o vídeo "
+            "terminar (aparece sobre tela preta), buraco na track de vídeo, legenda "
+            "fora da safe zone, texto sem contraste, segmento de duração zero, mídia "
+            "que saiu do disco, sobreposição. O save chama isto automaticamente e "
+            "recusa quando há erro — use antes para saber o que corrigir."
+        ),
+        "schema": {
+            "type": "object",
+            "properties": {
+                "draft_id": {"type": "string"},
+                "min_severity": {"type": "string", "enum": ["error", "warning", "info"],
+                                 "default": "info",
+                                 "description": "Filtra o que é reportado."},
             },
             "required": ["draft_id"], "additionalProperties": False,
         },
