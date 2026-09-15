@@ -16,7 +16,10 @@ import uuid
 import pytest
 
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-PY = os.path.join(REPO, ".venv", "bin", "python")
+# O servidor é lançado com o MESMO interpretador que roda os testes. Fixar
+# ".venv/bin/python" fazia os 20 testes de contrato quebrarem em qualquer clone
+# novo, onde a venv ainda não existe — verificado clonando o repositório.
+PY = sys.executable
 CJK = re.compile(r"[　-鿿]")
 
 
