@@ -136,13 +136,17 @@ def _file_fingerprint(path: str) -> str:
     return h.hexdigest()[:20]
 
 
-def transcript_id(source: str, model: str, language: str, max_chars: int) -> str:
+def fingerprint(source: str) -> str:
+    """Identidade do CONTEÚDO da mídia, independente de onde ela está no disco."""
     if source.startswith(("http://", "https://")):
-        base = hashlib.sha256(source.encode()).hexdigest()[:20]
-    else:
-        base = _file_fingerprint(source)
+        return hashlib.sha256(source.encode()).hexdigest()[:20]
+    return _file_fingerprint(source)
+
+
+def transcript_id(source: str, model: str, language: str, max_chars: int) -> str:
     return hashlib.sha256(
-        f"{base}|{model}|{language}|{max_chars}".encode()).hexdigest()[:24]
+        f"{fingerprint(source)}|{model}|{language}|{max_chars}".encode()
+    ).hexdigest()[:24]
 
 
 def _cache_path(tid: str) -> str:
@@ -343,6 +347,14 @@ def transcribe(source: str, *, language: str = "auto", model: str = DEFAULT_MODE
         cached = load_cached(tid)
         if cached:
             cached["cached"] = True
+            # registros antigos não têm fingerprint, e o arquivo pode ter sido
+            # movido desde a transcrição: reancora o registro no caminho atual
+            # para que find_cached_by_source o encontre.
+            if (cached.get("fingerprint") is None
+                    or cached.get("source") != probe["source"]):
+                cached["fingerprint"] = fingerprint(probe["source"])
+                cached["source"] = probe["source"]
+                save_cached(tid, {k: v for k, v in cached.items() if k != "cached"})
             return cached
 
     duration = probe.get("duration_s") or 0.0
@@ -359,6 +371,7 @@ def transcribe(source: str, *, language: str = "auto", model: str = DEFAULT_MODE
 
     result = {
         "transcript_id": tid,
+        "fingerprint": fingerprint(probe["source"]),
         "source": probe["source"],
         "language": parsed["language"],
         "duration_s": duration,
@@ -407,6 +420,14 @@ def cached_for_source(source: str) -> List[Dict[str, Any]]:
     para máquina.
     """
     alvo = os.path.abspath(os.path.expanduser(source))
+    # A identidade é o CONTEÚDO, não o caminho — é assim que o transcript_id é
+    # formado. Comparar só o caminho fazia o `transcribe` responder
+    # `cached: true` e o `snap` seguinte falhar com TRANSCRIPT_NOT_FOUND assim
+    # que o arquivo era movido, copiado ou alcançado por outro caminho.
+    try:
+        fp = fingerprint(alvo)
+    except OSError:
+        fp = None
     ordem = list(MODELS)
     achados: List[Tuple[int, float, Dict[str, Any]]] = []
     try:
@@ -423,7 +444,9 @@ def cached_for_source(source: str) -> List[Dict[str, Any]]:
             mtime = os.path.getmtime(caminho)
         except Exception:
             continue
-        if os.path.abspath(str(data.get("source", ""))) != alvo:
+        mesmo_conteudo = fp is not None and data.get("fingerprint") == fp
+        mesmo_caminho = os.path.abspath(str(data.get("source", ""))) == alvo
+        if not (mesmo_conteudo or mesmo_caminho):
             continue
         rank = ordem.index(data["model"]) if data.get("model") in ordem else -1
         achados.append((rank, mtime, data))

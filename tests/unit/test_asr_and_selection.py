@@ -21,7 +21,7 @@ import pytest
 
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 sys.path.insert(0, os.path.join(REPO, "src"))
-FX = os.path.abspath(os.path.join(REPO, "..", "fixtures"))
+FX = os.path.abspath(os.path.join(REPO, "fixtures"))
 
 from capcut_mcp import (asr, errors as E, handlers_media as HM, media,  # noqa: E402
                         obs, registry, timemap, tools, validator as V)
@@ -715,3 +715,49 @@ def test_transcript_id_inexistente_da_erro_acionavel():
         asr.require_cached(VIDEO_FALA, transcript_id="naoexiste")
     assert exc.value.code == E.TRANSCRIPT_NOT_FOUND
     assert "transcript_id" in exc.value.suggestion
+
+
+@tem_whisper
+def test_cache_segue_o_conteudo_nao_o_caminho(tmp_path):
+    """ACHADO F: o cache era endereçado por conteúdo e buscado por caminho.
+
+    Apareceu ao mover as fixtures para dentro do repo. O `transcribe` respondia
+    `cached: true` — acerto por fingerprint de conteúdo — e o `snap` seguinte
+    falhava com TRANSCRIPT_NOT_FOUND, porque `find_cached_by_source` comparava o
+    caminho absoluto. Basta mover o arquivo, ter uma cópia em outra pasta, ou
+    alcançá-lo por outro ponto de montagem.
+    """
+    asr.transcribe(VIDEO_FALA, language="pt")
+
+    copia = str(tmp_path / "outro_nome.mp4")
+    shutil.copy(VIDEO_FALA, copia)
+
+    r = asr.transcribe(copia, language="pt")
+    assert r["cached"] is True, "mesmo conteúdo tem de acertar o cache"
+    assert asr.find_cached_by_source(copia) is not None, \
+        "quem acabou de transcrever com sucesso não pode ouvir 'não existe'"
+    assert asr.require_cached(copia)["blocks"] == r["blocks"]
+    # e o caminho original continua encontrando
+    assert asr.find_cached_by_source(VIDEO_FALA) is not None
+
+
+@tem_whisper
+def test_snap_funciona_em_copia_da_midia(draft, tmp_path):
+    """O teste de ponta que o achado F quebrava: transcrever e cortar uma cópia."""
+    copia = str(tmp_path / "copia.mp4")
+    shutil.copy(VIDEO_FALA, copia)
+    asr.transcribe(copia, language="pt")
+    d, _ = call("capcut.video.cut", draft_id=draft, source=copia,
+                keep=[[5.0, 10.0]], snap="speech")
+    assert d["snap"] == "speech"
+    assert d["snapped"][0]["snapped"] is True
+
+
+def test_fingerprint_e_do_conteudo(tmp_path):
+    a = str(tmp_path / "a.mp4")
+    b = str(tmp_path / "b.mp4")
+    shutil.copy(VIDEO_FALA, a)
+    shutil.copy(VIDEO_FALA, b)
+    assert asr.fingerprint(a) == asr.fingerprint(b), \
+        "arquivos idênticos em caminhos diferentes têm o mesmo fingerprint"
+    assert asr.fingerprint(a) != asr.fingerprint(VIDEO_MUDO)

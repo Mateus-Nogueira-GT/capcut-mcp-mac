@@ -14,7 +14,7 @@ import sys
 
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 sys.path.insert(0, os.path.join(REPO, "src"))
-FX = os.path.abspath(os.path.join(REPO, "..", "fixtures"))
+FX = os.path.abspath(os.path.join(REPO, "fixtures"))
 
 from capcut_mcp import obs, tools  # noqa: E402
 
