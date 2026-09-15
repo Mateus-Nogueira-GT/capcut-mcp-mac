@@ -1,0 +1,504 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CapCut · corte, legenda e texto</title>
+<style>
+  :root {
+    --fundo: #ffffff; --fundo-2: #f7f7f8; --borda: #e5e5e5;
+    --texto: #1d1d1f; --texto-2: #6b6b70;
+    --acao: #1d1d1f; --acao-texto: #ffffff;
+    --ok: #0a7c42; --erro: #b3261e; --aviso: #8a5a00;
+    --raio: 12px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --fundo: #1b1b1d; --fundo-2: #242427; --borda: #35353a;
+      --texto: #f2f2f3; --texto-2: #9a9aa0;
+      --acao: #f2f2f3; --acao-texto: #1b1b1d;
+      --ok: #4ade80; --erro: #ff8a80; --aviso: #e0b155;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--fundo); color: var(--texto);
+    font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    display: flex; flex-direction: column; height: 100vh;
+  }
+  header {
+    display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+    padding: 12px 20px; border-bottom: 1px solid var(--borda);
+  }
+  header h1 { font-size: 15px; font-weight: 600; margin: 0; }
+  .pilulas { display: flex; gap: 6px; flex-wrap: wrap; margin-left: auto; }
+  .pilula {
+    font-size: 11.5px; padding: 3px 9px; border-radius: 99px;
+    background: var(--fundo-2); border: 1px solid var(--borda); color: var(--texto-2);
+    white-space: nowrap;
+  }
+  .pilula.bom { color: var(--ok); }
+  .pilula.ruim { color: var(--erro); border-color: currentColor; }
+
+  #alerta {
+    margin: 0; padding: 12px 20px; background: var(--fundo-2);
+    border-bottom: 1px solid var(--borda); font-size: 13.5px; color: var(--texto-2);
+  }
+  #alerta code {
+    background: var(--fundo); padding: 1px 5px; border-radius: 4px;
+    border: 1px solid var(--borda); font-size: 12.5px;
+  }
+  #alerta[hidden] { display: none !important; }
+
+  main { flex: 1; overflow-y: auto; padding: 24px 20px 8px; }
+  .fita { max-width: 760px; margin: 0 auto; display: flex; flex-direction: column; gap: 18px; }
+
+  .msg { display: flex; flex-direction: column; gap: 7px; }
+  .msg .quem { font-size: 12px; font-weight: 600; color: var(--texto-2); }
+  .msg .corpo { white-space: pre-wrap; word-break: break-word; }
+  .msg.eu .corpo {
+    background: var(--fundo-2); border: 1px solid var(--borda);
+    padding: 11px 14px; border-radius: var(--raio); align-self: flex-start;
+    max-width: 100%;
+  }
+
+  .vazio { color: var(--texto-2); text-align: center; padding: 56px 20px; }
+  .vazio h2 { font-size: 17px; font-weight: 600; color: var(--texto); margin: 0 0 8px; }
+  .exemplos { display: flex; flex-direction: column; gap: 8px; margin: 22px auto 0; max-width: 520px; }
+  .exemplo {
+    text-align: left; font: inherit; font-size: 13.5px; cursor: pointer;
+    background: var(--fundo-2); border: 1px solid var(--borda); color: var(--texto);
+    padding: 10px 13px; border-radius: 10px;
+  }
+  .exemplo:hover { border-color: var(--texto-2); }
+
+  .passo {
+    display: flex; gap: 9px; align-items: baseline; flex-wrap: wrap;
+    font-size: 13.5px;
+    padding: 7px 12px; background: var(--fundo-2); border: 1px solid var(--borda);
+    border-radius: 9px;
+  }
+  /* o nome é monoespaçado e longo (capcut.subtitle.from_transcript); sem estes
+     flex/min-width ele esmagava o resumo numa coluna de 3 caracteres no celular */
+  .passo .nome {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px;
+    flex: 0 0 auto;
+  }
+  .passo .det { color: var(--texto-2); word-break: break-word; flex: 1 1 55%; min-width: 0; }
+  .passo .ms { margin-left: auto; color: var(--texto-2); font-size: 11.5px; white-space: nowrap; flex: 0 0 auto; }
+  .passo.falhou { border-color: var(--erro); }
+  .passo.falhou .det { color: var(--erro); }
+  .avisos { font-size: 11.5px; color: var(--aviso); padding-left: 12px; }
+
+  details.pensou { font-size: 13px; color: var(--texto-2); }
+  details.pensou summary { cursor: pointer; }
+  details.pensou .corpo { white-space: pre-wrap; padding-top: 6px; }
+
+  .abrir {
+    align-self: flex-start; font: inherit; font-size: 13.5px; cursor: pointer;
+    background: var(--acao); color: var(--acao-texto); border: 0;
+    padding: 9px 15px; border-radius: 9px;
+  }
+  .gasto { font-size: 11.5px; color: var(--texto-2); }
+  .falha { color: var(--erro); font-size: 13.5px; }
+
+  footer { padding: 10px 20px 20px; }
+  .caixa {
+    max-width: 760px; margin: 0 auto; border: 1px solid var(--borda);
+    border-radius: var(--raio); background: var(--fundo-2); padding: 9px;
+  }
+  .caixa.arrastando { border-color: var(--texto); }
+  .anexos { display: flex; gap: 7px; flex-wrap: wrap; padding: 2px 4px 9px; }
+  .anexo {
+    font-size: 12px; background: var(--fundo); border: 1px solid var(--borda);
+    padding: 4px 9px; border-radius: 99px; display: flex; align-items: center; gap: 7px;
+  }
+  .anexo button { background: none; border: 0; cursor: pointer; color: var(--texto-2); font-size: 14px; padding: 0; }
+  .linha { display: flex; gap: 8px; align-items: flex-end; }
+  textarea {
+    flex: 1; resize: none; border: 0; background: none; color: var(--texto);
+    font: inherit; padding: 7px 5px; max-height: 190px; outline: none;
+  }
+  .icone, .enviar {
+    border: 0; cursor: pointer; border-radius: 8px; font: inherit;
+    width: 36px; height: 36px; flex: 0 0 36px;
+  }
+  .icone { background: var(--fundo); border: 1px solid var(--borda); color: var(--texto); font-size: 17px; }
+  .enviar { background: var(--acao); color: var(--acao-texto); font-size: 16px; }
+  .enviar:disabled, .icone:disabled { opacity: .4; cursor: default; }
+  .dica { max-width: 760px; margin: 8px auto 0; font-size: 11.5px; color: var(--texto-2); text-align: center; }
+
+  /* pareamento: só aparece quando a UI não é servida pelo próprio motor */
+  #pareia { position: fixed; inset: 0; background: var(--fundo); z-index: 10;
+            display: flex; align-items: center; justify-content: center; padding: 24px; }
+  #pareia[hidden] { display: none !important; }
+  .cartao { max-width: 520px; width: 100%; }
+  .cartao h2 { font-size: 17px; margin: 0 0 6px; }
+  .cartao p { color: var(--texto-2); font-size: 13.5px; margin: 0 0 14px; }
+  .cartao pre {
+    background: var(--fundo-2); border: 1px solid var(--borda); border-radius: 9px;
+    padding: 11px 13px; font-size: 12px; overflow-x: auto; margin: 0 0 14px;
+  }
+  .cartao label { display: block; font-size: 12px; color: var(--texto-2); margin: 10px 0 4px; }
+  .cartao input {
+    width: 100%; font: inherit; font-size: 13.5px; padding: 9px 11px;
+    border: 1px solid var(--borda); border-radius: 9px;
+    background: var(--fundo-2); color: var(--texto);
+  }
+  .cartao button {
+    margin-top: 14px; font: inherit; font-size: 14px; cursor: pointer;
+    background: var(--acao); color: var(--acao-texto); border: 0;
+    padding: 10px 18px; border-radius: 9px;
+  }
+  #pareiaErro { color: var(--erro); font-size: 13px; margin-top: 12px; min-height: 18px; line-height: 1.5; }
+  #pareiaErro code {
+    background: var(--fundo-2); border: 1px solid var(--borda); border-radius: 4px;
+    padding: 1px 5px; font-size: 12px; color: var(--texto); word-break: break-all;
+  }
+  #pareiaErro a { color: var(--texto); }
+  @media (max-width: 560px) {
+    header h1 { width: 100%; }
+    .pilulas { margin-left: 0; }
+    /* no celular o passo empilha: nome, resumo, tempo — um por linha */
+    .passo { flex-direction: column; align-items: stretch; gap: 3px; }
+    .passo .det, .passo .ms { flex: 1 1 auto; margin-left: 0; }
+    main { padding: 16px 16px 8px; }
+    footer { padding: 10px 16px 16px; }
+  }
+</style>
+</head>
+<body>
+
+<div id="pareia" hidden>
+  <div class="cartao">
+    <h2>Conecte ao seu Mac</h2>
+    <p>Esta página é a interface. O trabalho acontece na sua máquina, onde o seu
+       CapCut está — o vídeo não sai do seu computador. Rode o motor uma vez:</p>
+    <pre id="comando"></pre>
+    <label for="motorUrl">Endereço do motor</label>
+    <input id="motorUrl" value="http://127.0.0.1:5151" spellcheck="false">
+    <label for="tokenIn">Token de pareamento (o motor imprime no terminal)</label>
+    <input id="tokenIn" placeholder="cole aqui" spellcheck="false" autocomplete="off">
+    <button id="conectar">Conectar</button>
+    <div id="pareiaErro"></div>
+  </div>
+</div>
+
+<header>
+  <h1>CapCut · corte, legenda e texto</h1>
+  <div class="pilulas" id="pilulas"></div>
+</header>
+
+<p id="alerta" hidden></p>
+
+<main>
+  <div class="fita" id="fita">
+    <div class="vazio" id="vazio">
+      <h2>Anexe um vídeo e diga o que fazer</h2>
+      <p>A fala é transcrita nesta máquina. O projeto é montado no seu CapCut.</p>
+      <div class="exemplos">
+        <button class="exemplo">Corte os 3 melhores momentos e legende tudo</button>
+        <button class="exemplo">Ache onde ele fala de preço e monte um clipe de 30 s</button>
+        <button class="exemplo">Legende o vídeo inteiro, sem cortar nada</button>
+        <button class="exemplo">Corte de 0 a 15 s e ponha o título "ABERTURA" nos 2 primeiros segundos</button>
+      </div>
+    </div>
+  </div>
+</main>
+
+<footer>
+  <div class="caixa" id="caixa">
+    <div class="anexos" id="anexos"></div>
+    <div class="linha">
+      <button class="icone" id="clipe" title="Anexar vídeo ou áudio">+</button>
+      <textarea id="entrada" rows="1" placeholder="O que você quer montar?"></textarea>
+      <button class="enviar" id="enviar" title="Enviar">↑</button>
+    </div>
+  </div>
+  <p class="dica">Roda local. Ao terminar, volte à página inicial do CapCut para o projeto aparecer.</p>
+  <input type="file" id="arquivo" accept="video/*,audio/*" multiple hidden>
+</footer>
+
+<script>
+const $ = s => document.querySelector(s);
+const fita = $("#fita"), entrada = $("#entrada"), enviar = $("#enviar");
+const caixa = $("#caixa"), listaAnexos = $("#anexos"), campoArquivo = $("#arquivo");
+let anexos = [], sessao = null, ocupado = false;
+
+// ------------------------------------------------- onde está o motor
+// A MESMA página serve nos dois lugares: entregue pelo motor local (mesma
+// origem, nada a parear) ou hospedada (Vercel), apontando para o 127.0.0.1 de
+// quem abriu. O navegador é a ponte — ele roda na máquina onde o CapCut está.
+const LOCAL = /^(127\.0\.0\.1|localhost)$/.test(location.hostname);
+let MOTOR = LOCAL ? "" : (localStorage.getItem("capcut_motor") || "");
+let TOKEN = LOCAL ? "" : (localStorage.getItem("capcut_token") || "");
+
+function url(rota) { return (MOTOR || "") + rota; }
+function cab(extra) {
+  const h = Object.assign({}, extra || {});
+  if (TOKEN) h["X-Pair-Token"] = TOKEN;
+  return h;
+}
+function busca(rota, opcoes) {
+  const o = Object.assign({}, opcoes || {});
+  o.headers = cab(o.headers);
+  return fetch(url(rota), o);
+}
+
+function el(tag, cls, txt) {
+  const n = document.createElement(tag);
+  if (cls) n.className = cls;
+  if (txt !== undefined) n.textContent = txt;
+  return n;
+}
+function rolar() { const m = document.querySelector("main"); m.scrollTop = m.scrollHeight; }
+function limparVazio() { const v = $("#vazio"); if (v) v.remove(); }
+
+// ------------------------------------------------------------- pareamento
+if (!LOCAL) {
+  $("#comando").textContent =
+    "cd capcut-mcp-mac\n" +
+    "CAPCUT_ALLOW_ORIGIN=" + location.origin + " \\\n" +
+    "  ANTHROPIC_API_KEY=sk-ant-... \\\n" +
+    "  PYTHONPATH=src ./.venv/bin/python web/app.py";
+  if (MOTOR) $("#motorUrl").value = MOTOR;
+  if (TOKEN) $("#tokenIn").value = TOKEN;
+  $("#conectar").onclick = conecta;
+  $("#tokenIn").addEventListener("keydown", e => { if (e.key === "Enter") conecta(); });
+  if (MOTOR && TOKEN) conecta(true); else $("#pareia").hidden = false;
+}
+
+// Chrome 142+ (out/2025) tem Local Network Access: uma página de origem PÚBLICA
+// chamando 127.0.0.1 precisa de permissão explícita, e sem ela a requisição
+// falha EM SILÊNCIO — não dá erro de CORS, não aparece nada no console, só
+// pendura. Verificado: o motor responde 200 com Access-Control-Allow-Private-
+// Network, e a chamada nem chega nele. Por isso o timeout aqui é obrigatório:
+// sem ele o usuário fica olhando um botão que não faz nada.
+const LNA_MS = 6000;
+
+async function conecta(silencioso) {
+  const alvo = $("#motorUrl").value.trim().replace(/\/$/, "");
+  const tok = $("#tokenIn").value.trim();
+  const erro = $("#pareiaErro");
+  erro.innerHTML = "";
+  if (!alvo || !tok) { erro.textContent = "Preencha o endereço e o token."; return; }
+  MOTOR = alvo; TOKEN = tok;
+
+  const ac = new AbortController();
+  const relogio = setTimeout(() => ac.abort("lna"), LNA_MS);
+  try {
+    const r = await busca("/api/ping", { signal: ac.signal });
+    clearTimeout(relogio);
+    if (r.status === 401) throw new Error("Token recusado pelo motor.");
+    if (r.status === 403) {
+      const j = await r.json().catch(() => ({}));
+      throw new Error(j.erro || "O motor não autoriza esta origem.");
+    }
+    if (!r.ok) throw new Error("O motor respondeu " + r.status + ".");
+    await r.json();
+    localStorage.setItem("capcut_motor", MOTOR);
+    localStorage.setItem("capcut_token", TOKEN);
+    $("#pareia").hidden = true;
+    carregaAmbiente();
+  } catch (e) {
+    clearTimeout(relogio);
+    $("#pareia").hidden = false;
+    const pendurou = e.name === "AbortError" || String(e).includes("lna");
+    if (pendurou) {
+      erro.innerHTML =
+        "<b>O navegador barrou a chamada ao seu computador.</b><br>" +
+        "O motor respondeu no terminal, mas o Chrome bloqueia uma página da " +
+        "internet que chama <code>127.0.0.1</code> — é o <i>Local Network " +
+        "Access</i>, ligado por padrão desde o Chrome 142.<br><br>" +
+        "Dois caminhos:<br>" +
+        "1. Libere esta página em <code>chrome://settings/content/" +
+        "localNetworkAccess</code> e clique em Conectar de novo.<br>" +
+        "2. Ou use a interface servida pelo próprio motor, em " +
+        "<a href=\"" + alvo + "\">" + alvo + "</a> — mesma tela, sem " +
+        "pareamento e sem essa restrição.";
+    } else if (String(e.message).includes("Failed to fetch")) {
+      erro.innerHTML = "Não achei o motor em <code>" + alvo + "</code>. Ele " +
+        "está rodando, com o <code>CAPCUT_ALLOW_ORIGIN</code> desta página?";
+    } else {
+      erro.textContent = e.message;
+    }
+  }
+}
+
+// ----------------------------------------------------------------- ambiente
+function carregaAmbiente() {
+busca("/api/ambiente").then(r => r.json()).then(a => {
+  const p = $("#pilulas");
+  const add = (txt, estado) => p.appendChild(el("span", "pilula " + (estado || ""), txt));
+  add(a.capcut ? "CapCut " + a.capcut : "CapCut não encontrado", a.capcut ? "bom" : "ruim");
+  add(a.whisper ? "transcrição local" : "whisper.cpp ausente", a.whisper ? "bom" : "ruim");
+  add(a.api_key ? a.modelo_llm : "sem ANTHROPIC_API_KEY", a.api_key ? "" : "ruim");
+  // o disco desta máquina já chegou a zero três vezes; o save exige folga
+  if (typeof a.disco_gib === "number")
+    add(a.disco_gib.toFixed(1) + " GiB livres", a.disco_gib < 1 ? "ruim" : "");
+
+  const faltas = [];
+  if (!a.api_key) faltas.push("Defina <code>ANTHROPIC_API_KEY</code> e reinicie o servidor.");
+  if (!a.projeto_referencia)
+    faltas.push("Crie <b>um projeto à mão</b> no CapCut uma vez: ele serve de " +
+                "esqueleto real da sua versão do app.");
+  (a.avisos || []).forEach(w => {
+    faltas.push(w.texto + (w.correcao ? " → <code>" + w.correcao + "</code>" : ""));
+  });
+  if (faltas.length) { $("#alerta").innerHTML = faltas.join("<br>"); $("#alerta").hidden = false; }
+}).catch(() => {});
+}
+if (LOCAL) carregaAmbiente();
+
+// ------------------------------------------------------------------ anexos
+function desenhaAnexos() {
+  listaAnexos.innerHTML = "";
+  anexos.forEach((a, i) => {
+    const chip = el("span", "anexo");
+    chip.appendChild(el("span", null, a.nome + " · " + (a.bytes / 1048576).toFixed(1) + " MB"));
+    const x = el("button", null, "×");
+    x.onclick = () => { anexos.splice(i, 1); desenhaAnexos(); };
+    chip.appendChild(x);
+    listaAnexos.appendChild(chip);
+  });
+}
+async function sobe(arquivo) {
+  const chip = el("span", "anexo", "enviando " + arquivo.name + "…");
+  listaAnexos.appendChild(chip);
+  const fd = new FormData(); fd.append("arquivo", arquivo);
+  try {
+    const r = await busca("/api/upload", { method: "POST", body: fd });
+    const j = await r.json();
+    chip.remove();
+    if (j.erro) { alert(j.erro); return; }
+    anexos.push(j); desenhaAnexos();
+  } catch (e) { chip.remove(); alert("Falha ao enviar: " + e.message); }
+}
+$("#clipe").onclick = () => campoArquivo.click();
+campoArquivo.onchange = e => { [...e.target.files].forEach(sobe); campoArquivo.value = ""; };
+["dragenter", "dragover"].forEach(ev =>
+  caixa.addEventListener(ev, e => { e.preventDefault(); caixa.classList.add("arrastando"); }));
+["dragleave", "drop"].forEach(ev =>
+  caixa.addEventListener(ev, e => { e.preventDefault(); caixa.classList.remove("arrastando"); }));
+caixa.addEventListener("drop", e => [...e.dataTransfer.files].forEach(sobe));
+
+// ------------------------------------------------------------------- envio
+entrada.addEventListener("input", () => {
+  entrada.style.height = "auto";
+  entrada.style.height = Math.min(entrada.scrollHeight, 190) + "px";
+});
+entrada.addEventListener("keydown", e => {
+  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); manda(); }
+});
+enviar.onclick = manda;
+document.addEventListener("click", e => {
+  if (e.target.classList.contains("exemplo")) { entrada.value = e.target.textContent; entrada.focus(); }
+});
+
+function trava(v) {
+  ocupado = v; enviar.disabled = v; $("#clipe").disabled = v;
+  enviar.textContent = v ? "…" : "↑";
+}
+
+async function manda() {
+  const texto = entrada.value.trim();
+  if (ocupado || (!texto && !anexos.length)) return;
+  limparVazio();
+
+  const meu = el("div", "msg eu");
+  meu.appendChild(el("div", "quem", "Você"));
+  const corpo = el("div", "corpo", texto);
+  if (anexos.length) corpo.textContent += (texto ? "\n" : "") + anexos.map(a => "📎 " + a.nome).join("\n");
+  meu.appendChild(corpo);
+  fita.appendChild(meu);
+
+  const payload = { sessao, texto, anexos: anexos.map(a => a.caminho) };
+  entrada.value = ""; entrada.style.height = "auto";
+  anexos = []; desenhaAnexos();
+  trava(true); rolar();
+
+  const bloco = el("div", "msg");
+  bloco.appendChild(el("div", "quem", "Claude"));
+  fita.appendChild(bloco);
+
+  try {
+    const r = await busca("/api/chat", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const leitor = r.body.getReader();
+    const dec = new TextDecoder();
+    let buf = "";
+    while (true) {
+      const { done, value } = await leitor.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      const linhas = buf.split("\n\n");
+      buf = linhas.pop();
+      for (const l of linhas) {
+        if (!l.startsWith("data: ")) continue;
+        trata(JSON.parse(l.slice(6)), bloco);
+      }
+    }
+  } catch (e) {
+    bloco.appendChild(el("div", "falha", "Conexão interrompida: " + e.message));
+  }
+  trava(false); rolar();
+}
+
+const pendentes = new Map();
+
+function trata(ev, bloco) {
+  if (ev.tipo === "sessao") { sessao = ev.id; return; }
+
+  if (ev.tipo === "pensando") {
+    const d = el("details", "pensou");
+    d.appendChild(el("summary", null, "raciocínio"));
+    d.appendChild(el("div", "corpo", ev.texto));
+    bloco.appendChild(d);
+
+  } else if (ev.tipo === "texto") {
+    bloco.appendChild(el("div", "corpo", ev.texto));
+
+  } else if (ev.tipo === "tool_inicio") {
+    const p = el("div", "passo");
+    p.appendChild(el("span", "nome", ev.nome));
+    p.appendChild(el("span", "det", "…"));
+    p.appendChild(el("span", "ms", ""));
+    bloco.appendChild(p);
+    pendentes.set(ev.nome, p);
+
+  } else if (ev.tipo === "tool_fim") {
+    const p = pendentes.get(ev.nome) || bloco.appendChild(el("div", "passo"));
+    pendentes.delete(ev.nome);
+    p.innerHTML = "";
+    p.className = "passo" + (ev.ok ? "" : " falhou");
+    p.appendChild(el("span", "nome", ev.nome));
+    p.appendChild(el("span", "det", ev.resumo));
+    p.appendChild(el("span", "ms", ev.ms + " ms"));
+    if (ev.avisos && ev.avisos.length)
+      bloco.appendChild(el("div", "avisos", "⚠ " + ev.avisos.join(" · ")));
+    if (ev.ok && ev.nome === "capcut.draft.save" && ev.resumo.startsWith("/")) {
+      const b = el("button", "abrir", "Mostrar no Finder");
+      b.onclick = () => busca("/api/revelar", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ caminho: ev.resumo }),
+      });
+      bloco.appendChild(b);
+    }
+
+  } else if (ev.tipo === "erro") {
+    bloco.appendChild(el("div", "falha", ev.texto));
+
+  } else if (ev.tipo === "fim" && ev.gasto) {
+    const g = ev.gasto;
+    bloco.appendChild(el("div", "gasto",
+      `${g.entrada.toLocaleString("pt-BR")} tokens de entrada · ` +
+      `${g.saida.toLocaleString("pt-BR")} de saída · ` +
+      `${g.cache_lido.toLocaleString("pt-BR")} lidos do cache`));
+  }
+  rolar();
+}
+</script>
+</body>
+</html>

@@ -55,7 +55,37 @@ paga.
 
 ---
 
-## UI hospedada na Vercel: subiu, mas o Chrome barra
+## O app hospedado: https://capcut-front.vercel.app
+
+**É o caminho principal.** Todo mundo abre o mesmo link, entra com o código
+interno, escolhe a própria máquina e manda trabalho. Verificado de ponta a ponta.
+
+O que é irredutível, e vale entender uma vez: **cada pessoa roda o agente no Mac
+dela.** Não é limitação de hospedagem — é que o produto entrega projeto do CapCut
+escrevendo arquivo em disco, e roda whisper.cpp e ffmpeg. Esse trabalho acontece
+onde o CapCut está instalado. Nenhuma arquitetura muda isso; o que a hospedagem
+resolve é a *interface* ser compartilhada.
+
+```sh
+# uma vez por máquina, e deixa rodando
+CAPCUT_RELAY=https://capcut-front.vercel.app \
+CAPCUT_MAQUINA=<nome-da-pessoa> \
+CAPCUT_RELAY_TOKEN=<segredo de 24+ caracteres> \
+ANTHROPIC_API_KEY=sk-ant-... \
+  PYTHONPATH=src ./.venv/bin/python web/relay.py
+```
+
+O agente liga **para fora** a cada 3 s e puxa trabalho, então não há chamada da
+página para a rede local e a restrição do Chrome não se aplica. Os vídeos ficam
+em `~/CapCut Entrada`; o agente informa o que há lá e a UI mostra a lista. **O
+arquivo nunca sobe.**
+
+Rotas: `/` é o painel; `/local` é a tela que fala direto com `127.0.0.1`, para
+quem preferir trabalhar só na própria máquina.
+
+### Histórico: por que eu quase não construí isto
+
+Cheguei a recomendar o contrário, e estava errado.
 
 `https://capcut-front.vercel.app` está no ar e serve a mesma tela, com uma etapa
 de pareamento. **Ela não conecta no motor local no Chrome padrão**, e isso foi
@@ -80,9 +110,8 @@ o motor envia era o mecanismo *anterior* a esse modelo; ele não basta mais.
 Testado no painel de preview (`ERR_BLOCKED_BY_CLIENT`) e no Chrome real do
 usuário (pendura sem erro). O lado servidor está correto nos dois.
 
-### O que fazer — e por que eu recomendei errado antes
+### Sobre a restrição do Chrome, que não afeta mais o caminho principal
 
-Cheguei a construir o relay (caminho 3) tratando isso como bloqueio. **Não é.**
 Inspecionando o perfil do Chrome desta máquina:
 
 ```
@@ -100,17 +129,11 @@ dois cliques automatizados: o prompt apareceu, a automação não interagiu, e o
 Chrome parou de oferecer. Eu li "falha silenciosa" como "impossível" quando era
 "ninguém clicou em permitir".
 
-1. **Liberar a permissão, uma vez por navegador** — em
-   `chrome://settings/content/localNetworkAccess`, adicionar
-   `https://capcut-front.vercel.app`. Num parque gerenciado, a política
-   `LocalNetworkAccessAllowedForUrls` faz de uma vez. **É a recomendação, e não
-   custa banco nem relay.**
-2. **Interface local** (`http://127.0.0.1:5151`): mesma tela, mesma origem, nem
-   permissão precisa. Só não dá URL compartilhado.
-3. **Relay** (`/relay` no app hospedado): o motor liga para fora e puxa trabalho,
-   sem nenhuma chamada para a rede local. Custa um Postgres e uma fila. Só vale
-   se a permissão do caminho 1 não for aceitável — parque não gerenciado, ou
-   navegador que não ofereça a opção.
+Isso só importa para a rota `/local` aberta de um domínio hospedado — um caso de
+borda. O painel principal não faz chamada para a rede local, então não depende de
+permissão nenhuma. Foi o erro de leitura que me fez quase descartar o relay: eu
+tratei a permissão como solução suficiente, quando ela resolve só o caso de borda
+e deixa a configuração na mão de cada pessoa.
 
 A tela hospedada explica isso sozinha quando a conexão pendura, com o caminho da
 configuração e o link para a versão local. O que ela não faz é fingir que

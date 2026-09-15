@@ -6,8 +6,8 @@
       "destination": "/api/index"
     },
     {
-      "source": "/relay",
-      "destination": "/static/relay.html"
+      "source": "/local",
+      "destination": "/static/local.html"
     },
     {
       "source": "/",
