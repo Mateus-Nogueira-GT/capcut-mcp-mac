@@ -37,6 +37,13 @@ instalar nada.
 - **Não substitui o CapCut.** Estilo de legenda, reenquadramento e export são
   dele — e ele faz melhor.
 - **Sem publicação em rede social**, sem score de viralidade (ver §9).
+- **A IA analisa o que é FALADO, não o que é MOSTRADO.** A seleção lê o
+  transcript; não há análise de pista visual nem de sentimento na imagem, que é
+  o que o Opus Clip também faz. Consequência prática: funciona bem em podcast,
+  entrevista e pessoa falando — o caso comum —, e **não** acha momento
+  visualmente engraçado sem fala nem reação que não foi transcrita. Fechar essa
+  lacuna é factível depois (amostrar um frame a cada N segundos e mandar junto
+  com o transcript para o modelo multimodal), e está fora desta spec.
 
 ## 4. Arquitetura
 
@@ -218,21 +225,39 @@ escolhido precisa transcrever a fixture `fala_pt.wav` pelo menos tão bem quanto
 | AC7 | O SRT reflete um ajuste de corte feito depois, sem passo manual |
 | AC8 | Nenhum passo do servidor passa de 300 s |
 | AC9 | O modo MCP/Desktop continua passando os 246 testes existentes |
+| AC10 | **Uma gravação real sobe e sai com clipes curtos cortados e com justificativa — conferido do início ao fim** |
 
-**AC5 é o único que prova o produto.** Os outros protegem as partes; só a tela do
-CapCut confirma que a entrega serve. É a mesma lição do AC7 da spec anterior.
+**Dois critérios provam coisas diferentes, e os dois são de tela.**
+
+**AC10 prova o produto da Fase 3** — o que foi pedido primeiro. Uma gravação de
+verdade, não a fixture: sobe, a IA aponta os highlights com minutagem e o motivo,
+e os clipes baixados abrem e começam onde deveriam. Se isso funciona, existe
+produto mesmo que nada de CapCut seja construído.
+
+**AC5 prova a entrega da Fase 5** — o SRT alinhado dentro do CapCut Web. É a
+mesma lição do AC7 da spec anterior: a aritmética pode estar certa e a entrega
+não servir; só o olho confirma.
 
 ## 11. Fases
 
+Ordem definida pela prioridade do produto: o que o usuário pediu primeiro é
+subir o arquivo, receber os insights com a minutagem, e ter os clipes cortados.
+Tudo que é entrega para o CapCut Web vem depois.
+
 | Fase | Entrega | Termina com |
 |---|---|---|
-| **1** | **Validar R1 antes de construir**: gerar um SRT da fixture e importar no CapCut Web | evidência na tela, ou o desenho muda |
-| 2 | Upload + preview local + projeto no Neon | AC1 |
-| 3 | ASR por API + seleção pela LLM | AC2 |
-| 4 | Tela de revisão: pontas, legendas, títulos | AC3, AC7 |
-| 5 | Corte por cópia de fluxo + SRT derivado | AC4, AC6, AC8 |
-| 6 | Entrega e passo a passo | **AC5** |
+| **1** | Upload + preview do arquivo local + projeto no Neon | AC1 |
+| **2** | Transcrição por API + seleção pela LLM, com insight e minutagem | AC2 |
+| **3** | Corte em clipes curtos por cópia de fluxo | AC4, AC8, **AC10** |
+| 4 | Tela de revisão: pontas, legendas, títulos, descartar clipe | AC3, AC7 |
+| 5 | SRT derivado + **validar o import no CapCut Web** | AC5, AC6 |
+| 6 | Entrega e passo a passo | AC5 completo |
 
-A Fase 1 é deliberadamente antes de tudo: se o import não aceitar o nosso SRT
-como esperamos, as fases 2 a 6 mudam de forma. Custa uma sessão de teste e
-protege o resto.
+**Ao fim da Fase 3 o produto já é usável sozinho:** sobe a gravação, recebe os
+highlights com justificativa e minutagem, baixa os clipes curtos cortados. Não
+depende de nada do CapCut.
+
+A validação do import de SRT (risco R1) sai da frente e vai para a Fase 5, que é
+onde ela passa a importar. Até ali ela não bloqueia nada — e quando chegar, o
+§9.1 já garante que um comportamento inesperado do CapCut tem recuperação sem
+novo deploy.
