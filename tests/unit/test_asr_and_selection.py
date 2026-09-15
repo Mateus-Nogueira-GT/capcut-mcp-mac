@@ -23,8 +23,8 @@ REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 sys.path.insert(0, os.path.join(REPO, "src"))
 FX = os.path.abspath(os.path.join(REPO, "..", "fixtures"))
 
-from capcut_mcp import (asr, errors as E, handlers_media as HM, obs,  # noqa: E402
-                        registry, timemap, tools, validator as V)
+from capcut_mcp import (asr, errors as E, handlers_media as HM, media,  # noqa: E402
+                        obs, registry, timemap, tools, validator as V)
 
 WAV = os.path.join(FX, "fala_pt.wav")           # 16,72 s, fala PT-BR conhecida
 VIDEO_FALA = os.path.join(FX, "video_fala.mp4")  # 18,77 s, mesma fala
@@ -571,3 +571,147 @@ def test_subtitle_nao_promete_borda_que_nao_aceita():
         assert not expostos, (
             f"{nome} passou a expor {expostos}, mas apply_subtitle ainda ignora "
             "esses campos — ligue-os no applier antes de expor no schema")
+
+
+# ============================== achados da auditoria de L1 e L2 (regressão)
+@tem_whisper
+def test_snap_nao_cruza_trechos_vizinhos(draft):
+    """ACHADO A: o snap cruzava dois `keep` e duplicava mídia no resultado.
+
+    Medido antes da correção: keep=[[1.0,3.2],[3.3,6.0]] virava
+    [[1.15,3.43],[3.15,6.03]] — 0,280 s da origem apareciam DUAS vezes na
+    timeline (gagueira audível), o mapa de tempo ficava ambíguo, e nada avisava:
+    a checagem de sobreposição roda antes do snap, então ele passava por cima.
+    """
+    asr.transcribe(VIDEO_FALA, language="pt")
+    d, bus = call("capcut.video.cut", draft_id=draft, source=VIDEO_FALA,
+                  keep=[[1.0, 3.2], [3.3, 6.0]], snap="speech")
+    aplicados = [s["applied"] for s in d["snapped"]]
+    for (_, fim), (ini, _) in zip(aplicados, aplicados[1:]):
+        assert fim <= ini + 1e-6, f"trechos se cruzam: {aplicados}"
+
+    from capcut_mcp.upstream import DRAFT_CACHE
+    segs = sorted(DRAFT_CACHE[draft].tracks["video_main"].segments,
+                  key=lambda s: s.target_timerange.start)
+    for a, b in zip(segs, segs[1:]):
+        ini = max(a.source_timerange.start, b.source_timerange.start)
+        fim = min(a.source_timerange.end, b.source_timerange.end)
+        assert fim <= ini, "o mesmo pedaço da origem entrou duas vezes na timeline"
+    assert any(w["code"] == "SNAP_LIMITED_BY_NEIGHBOUR" for w in bus.warnings), \
+        "conter o snap sem avisar esconde que as pontas não ficaram na fala"
+
+
+@tem_whisper
+def test_snap_contido_para_no_meio_do_intervalo(draft):
+    """A ponta anda no máximo até a metade do vão que separa os dois trechos."""
+    asr.transcribe(VIDEO_FALA, language="pt")
+    d, _ = call("capcut.video.cut", draft_id=draft, source=VIDEO_FALA,
+                keep=[[1.0, 3.2], [3.3, 6.0]], snap="speech")
+    fim0 = d["snapped"][0]["applied"][1]
+    ini1 = d["snapped"][1]["applied"][0]
+    assert fim0 == pytest.approx((3.2 + 3.3) / 2, abs=1e-6)
+    assert ini1 == pytest.approx((3.2 + 3.3) / 2, abs=1e-6)
+
+
+@tem_whisper
+def test_delta_do_snap_descreve_o_que_foi_aplicado(draft):
+    """ACHADO B: o delta era calculado antes do clamp no fim da mídia.
+
+    Pedindo até a duração exata, o padding empurrava além do fim; o valor
+    aplicado era clampado mas o delta reportado não, então quem somasse
+    `pedido + delta` chegava a um instante que não existe na mídia.
+    """
+    asr.transcribe(VIDEO_FALA, language="pt")
+    dur = media.probe(VIDEO_FALA)["duration_s"]
+    d, _ = call("capcut.video.cut", draft_id=draft, source=VIDEO_FALA,
+                keep=[[13.0, dur]], snap="speech")
+    s = d["snapped"][0]
+    assert s["applied"][0] == pytest.approx(13.0 + s["delta_start_s"], abs=1e-3)
+    assert s["applied"][1] == pytest.approx(dur + s["delta_end_s"], abs=1e-3)
+    assert s["applied"][1] <= dur + 1e-6, "corte não pode passar do fim da mídia"
+
+
+def test_fusao_de_blocos_respeita_max_chars():
+    """ACHADO C: a fusão de blocos curtos estourava o limite pedido.
+
+    O `-ml` do binário limita o que ELE emite, mas a fusão acontece depois.
+    Medido antes: com max_chars=16 saía um bloco de 33 caracteres.
+    """
+    curtos = [{"start": i * 0.4, "end": i * 0.4 + 0.4, "text": "palavra"}
+              for i in range(6)]
+    blocos = asr._shape_blocks(curtos, max_block_s=10.0, max_chars=16)
+    assert blocos, "não pode devolver vazio"
+    for b in blocos:
+        assert len(b["text"]) <= 16, f"fusão estourou o limite: {b['text']!r}"
+    # sem limite de texto a fusão junta tudo — é o comportamento que quebrava
+    solto = asr._shape_blocks(curtos, max_block_s=10.0, max_chars=1000)
+    assert len(solto) < len(blocos), "o limite de texto tem de conter a fusão"
+
+
+@tem_whisper
+def test_max_chars_e_alvo_e_a_tela_nao_transborda():
+    """O excesso que resta é do binário, que não parte palavra — e está declarado.
+
+    O que importa é a tela: o subtitle.add quebra em limite de palavra depois,
+    então um bloco acima do alvo vira duas linhas em vez de transbordar.
+    """
+    r = asr.transcribe(VIDEO_FALA, language="pt", max_chars=40)
+    pior = max(len(b["text"]) for b in r["blocks"])
+    assert pior <= 40 * 1.3, f"excesso além do medido (25%): {pior} caracteres"
+    desc = tools.TOOLS["capcut.media.transcribe"]["schema"]["properties"][
+        "max_chars_per_block"]["description"].lower()
+    assert "alvo" in desc and "teto" in desc, \
+        "se o limite é aproximado, a descrição tem de dizer isso"
+
+
+@tem_whisper
+def test_escolha_de_transcript_e_deterministica(tmp_path):
+    """ACHADO D/E: com várias transcrições da mesma mídia, vencia o os.listdir.
+
+    A chave do cache inclui modelo, idioma e max_chars, mas a busca por caminho
+    ignorava os três. Resultado: o from_transcript podia devolver legendas
+    moldadas com um max_chars que ninguém pediu, e a escolha mudava de máquina
+    para máquina.
+    """
+    for mc in (16, 26, 60):
+        asr.transcribe(VIDEO_FALA, language="pt", max_chars=mc)
+    ids = {asr.find_cached_by_source(VIDEO_FALA)["transcript_id"] for _ in range(5)}
+    assert len(ids) == 1, f"escolha instável entre chamadas: {ids}"
+    assert asr.find_cached_by_source(VIDEO_FALA, max_chars=26)["max_chars"] == 26
+    assert asr.find_cached_by_source(VIDEO_FALA, max_chars=60)["max_chars"] == 60
+    cands = asr.cached_for_source(VIDEO_FALA)
+    assert len(cands) >= 3
+    assert cands == asr.cached_for_source(VIDEO_FALA), "a ordem tem de ser estável"
+
+
+@tem_whisper
+def test_from_transcript_declara_e_permite_fixar_qual_usou(draft):
+    for mc in (26, 60):
+        asr.transcribe(VIDEO_FALA, language="pt", max_chars=mc)
+    call("capcut.video.cut", draft_id=draft, source=VIDEO_FALA,
+         keep=[[1.0, 5.0], [8.0, 12.0]])
+    s, bus = call("capcut.subtitle.from_transcript", draft_id=draft,
+                  source=VIDEO_FALA, max_chars_per_block=26)
+    assert s["transcript_max_chars"] == 26, "a preferência tem de ser honrada"
+    assert s["transcript_model"] and s["transcript_id"]
+    assert any(w["code"] == "TRANSCRIPT_AMBIGUOUS" for w in bus.warnings), \
+        "havendo mais de uma transcrição, o agente precisa saber qual entrou"
+
+    alvo = asr.find_cached_by_source(VIDEO_FALA, max_chars=60)
+    d2, _ = call("capcut.draft.create", name="pin", width=1080, height=1920)
+    try:
+        call("capcut.video.cut", draft_id=d2["draft_id"], source=VIDEO_FALA,
+             keep=[[1.0, 5.0], [8.0, 12.0]])
+        s2, _ = call("capcut.subtitle.from_transcript", draft_id=d2["draft_id"],
+                     source=VIDEO_FALA, transcript_id=alvo["transcript_id"])
+        assert s2["transcript_id"] == alvo["transcript_id"]
+        assert s2["transcript_max_chars"] == 60
+    finally:
+        registry.discard(d2["draft_id"])
+
+
+def test_transcript_id_inexistente_da_erro_acionavel():
+    with pytest.raises(E.CapcutError) as exc:
+        asr.require_cached(VIDEO_FALA, transcript_id="naoexiste")
+    assert exc.value.code == E.TRANSCRIPT_NOT_FOUND
+    assert "transcript_id" in exc.value.suggestion

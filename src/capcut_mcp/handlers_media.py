@@ -609,22 +609,58 @@ def apply_cut(script: Any, draft_id: str, a: Dict[str, Any],
         tol = float(a.get("snap_tolerance", 0.5))
         pad = float(a.get("snap_padding", 0.15))
         limite = probe["duration_s"] or 0.0
-        ajustados = []
-        for s0, s1 in ordered:
+
+        # Cada ponta só pode andar até a METADE do intervalo que a separa do
+        # trecho vizinho. Sem isso o fim de um trecho avança enquanto o início
+        # do seguinte recua, os dois se cruzam, e o pedaço na interseção aparece
+        # DUAS vezes no vídeo final — uma gagueira audível. A checagem de
+        # sobreposição acima roda antes do snap, então não pegava esse caso.
+        limites = []
+        for i, (s0, s1) in enumerate(ordered):
+            piso = 0.0 if i == 0 else (ordered[i - 1][1] + s0) / 2.0
+            teto = (limite if limite else s1) if i == len(ordered) - 1 \
+                else (s1 + ordered[i + 1][0]) / 2.0
+            limites.append((piso, teto))
+
+        ajustados, barrados = [], 0
+        for (s0, s1), (piso, teto) in zip(ordered, limites):
             r = timemap.snap_range(palavras, s0, s1, tolerance=tol, padding=pad)
-            novo0, novo1 = r["start"], min(r["end"], limite) if limite else r["end"]
+            novo0 = max(r["start"], piso)
+            novo1 = min(r["end"], teto)
+            if novo0 != r["start"] or novo1 != r["end"]:
+                barrados += 1
             ajustados.append((novo0, novo1))
-            snapped_report.append({"requested": [s0, s1], "applied": [novo0, novo1],
-                                   "delta_start_s": r["delta_start_s"],
-                                   "delta_end_s": r["delta_end_s"],
-                                   "snapped": r["snapped"]})
+            # os deltas descrevem o que foi APLICADO, não o que o snap quis:
+            # o clamp pela duração da mídia e pelo vizinho entra na conta.
+            snapped_report.append({
+                "requested": [s0, s1], "applied": [novo0, novo1],
+                "delta_start_s": round(novo0 - s0, 3),
+                "delta_end_s": round(novo1 - s1, 3),
+                "snapped": abs(novo0 - s0) > 1e-3 or abs(novo1 - s1) > 1e-3,
+            })
         ordered = ajustados
+        for (a0, a1), (b0, _b1) in zip(ordered, ordered[1:]):
+            if b0 < a1 - 1e-6:                       # invariante, não deve ocorrer
+                raise E.CapcutError(
+                    E.INTERNAL_ERROR,
+                    f"O snap produziu trechos sobrepostos: [{a0}, {a1}] e "
+                    f"[{b0}, ...].",
+                    "Isto é um defeito do adaptador; relate com os parâmetros "
+                    "usados. Contorne com snap='none'.",
+                    ordered=ordered)
         moveram = [r for r in snapped_report if r["snapped"]]
         if moveram:
             bus.add("CUT_SNAPPED_TO_SPEECH",
-                    f"{len(moveram)} de {len(ordered)} ponta(s) foram movidas para a "
-                    "fronteira de palavra, para não cortar no meio da fala.",
+                    f"{len(moveram)} de {len(ordered)} trecho(s) tiveram pontas "
+                    "movidas para a fronteira de palavra, para não cortar no meio "
+                    "da fala.",
                     ajustes=moveram)
+        if barrados:
+            bus.add("SNAP_LIMITED_BY_NEIGHBOUR",
+                    f"Em {barrados} trecho(s) o snap foi contido para não invadir o "
+                    "trecho vizinho nem passar do fim da mídia. As pontas ficaram "
+                    "próximas da fala, mas não exatamente na fronteira.",
+                    trechos=barrados)
 
     speed = float(a.get("speed", 1.0))
     track = a.get("track") or TRACK_VIDEO
@@ -748,7 +784,21 @@ def apply_subtitle_from_transcript(script: Any, draft_id: str, a: Dict[str, Any]
     from . import asr, timemap
 
     source = a["source"]
-    transcript = asr.require_cached(source)
+    transcript = asr.require_cached(
+        source, max_chars=a.get("max_chars_per_block"),
+        transcript_id=a.get("transcript_id"))
+    outros = [d for d in asr.cached_for_source(source)
+              if d.get("transcript_id") != transcript.get("transcript_id")]
+    if outros:
+        bus.add("TRANSCRIPT_AMBIGUOUS",
+                f"Esta mídia tem {len(outros) + 1} transcrições em cache. Usei a de "
+                f"modelo '{transcript['model']}' com max_chars="
+                f"{transcript['max_chars']} ({transcript['block_count']} blocos). "
+                "Para escolher outra, passe transcript_id.",
+                usada=transcript["transcript_id"],
+                disponiveis=[{"transcript_id": d["transcript_id"],
+                              "model": d["model"], "max_chars": d["max_chars"],
+                              "block_count": d["block_count"]} for d in outros[:8]])
     mapa = timemap.build(script, source)
     if not mapa:
         raise E.CapcutError(
@@ -779,7 +829,8 @@ def apply_subtitle_from_transcript(script: Any, draft_id: str, a: Dict[str, Any]
             blocks_dropped=descartados)
 
     estilo = {k: v for k, v in a.items()
-              if k not in ("source", "straddle", "draft_id")}
+              if k not in ("source", "straddle", "draft_id", "transcript_id",
+                           "max_chars_per_block")}
     info = apply_subtitle(script, draft_id, dict(estilo, segments=remapeados), bus)
 
     if descartados:
@@ -793,6 +844,8 @@ def apply_subtitle_from_transcript(script: Any, draft_id: str, a: Dict[str, Any]
     info.update({
         "kind": "subtitle_from_transcript",
         "transcript_id": transcript["transcript_id"],
+        "transcript_model": transcript["model"],
+        "transcript_max_chars": transcript["max_chars"],
         "blocks_in_transcript": len(transcript["blocks"]),
         "blocks_dropped": descartados,
         "blocks_truncated": truncados,

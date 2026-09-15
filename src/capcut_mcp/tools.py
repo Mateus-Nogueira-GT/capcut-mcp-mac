@@ -843,8 +843,14 @@ TOOLS.update({
                                           "palavra: infla muito a resposta."},
                 "max_chars_per_block": {"type": "integer", "minimum": 12, "maximum": 120,
                                         "default": 26,
-                                        "description": "Molda o bloco de legenda. 26 foi "
-                                                       "medido na tela do CapCut."},
+                                        "description": "Alvo de comprimento do bloco. 26 "
+                                                       "foi medido na tela do CapCut. É "
+                                                       "ALVO, não teto: o whisper.cpp não "
+                                                       "parte palavra, então um bloco pode "
+                                                       "passar do limite — medido, até uns "
+                                                       "25% acima. O subtitle.add quebra "
+                                                       "em linha depois, então na tela não "
+                                                       "transborda."},
                 "max_block_seconds": {"type": "number", "default": 4.0},
                 "offset": {"type": "integer", "minimum": 0, "default": 0,
                            "description": "Paginação, para transcript longo."},
@@ -875,6 +881,14 @@ TOOLS.update({
                 "draft_id": {"type": "string"},
                 "source": {"type": "string",
                            "description": "A mesma mídia que foi transcrita e cortada."},
+                "transcript_id": {"type": "string",
+                                  "description": "Fixa QUAL transcrição usar, quando a "
+                                                 "mesma mídia tem várias em cache. "
+                                                 "Omitir usa a mais recente do modelo "
+                                                 "mais forte, e avisa se houver outras."},
+                "max_chars_per_block": {"type": "integer", "minimum": 12, "maximum": 120,
+                                        "description": "Prefere a transcrição moldada "
+                                                       "com este limite, se existir."},
                 "track": {"type": "string", "default": _HM.TRACK_SUBTITLE},
                 "straddle": {"type": "string",
                              "enum": ["truncate", "drop", "keep_partial"],

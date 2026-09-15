@@ -259,21 +259,26 @@ def _tokens_to_words(tokens: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return [w for w in words if w["word"]]
 
 
-def _shape_blocks(raw: List[Dict[str, Any]], max_block_s: float) -> List[Dict[str, Any]]:
-    """Funde blocos curtos demais e parte blocos longos demais.
+def _shape_blocks(raw: List[Dict[str, Any]], max_block_s: float,
+                  max_chars: int = DEFAULT_MAX_CHARS) -> List[Dict[str, Any]]:
+    """Funde blocos curtos demais no anterior, respeitando tempo E comprimento.
 
-    O `-ml` do binário já limita o comprimento em caracteres; aqui cuidamos só do
-    tempo, que ele não controla.
+    O `-ml` do binário limita o comprimento de cada bloco que ELE emite, mas a
+    fusão aqui acontece depois — e sem conferir o comprimento ela estourava o
+    limite que a tool anuncia. Medido: com `max_chars=16` saía um bloco de 33
+    caracteres, o dobro do pedido, que na tela quebra em duas linhas sem aviso.
     """
     blocks: List[Dict[str, Any]] = []
     for b in raw:
         if blocks:
             prev = blocks[-1]
+            fundido = f"{prev['text']} {b['text']}".strip()
             curta = b["end"] - b["start"] < MIN_BLOCK_S
-            caberia = (b["end"] - prev["start"]) <= max_block_s
-            if curta and caberia:
+            cabe_no_tempo = (b["end"] - prev["start"]) <= max_block_s
+            cabe_no_texto = len(fundido) <= max_chars
+            if curta and cabe_no_tempo and cabe_no_texto:
                 prev["end"] = b["end"]
-                prev["text"] = f"{prev['text']} {b['text']}".strip()
+                prev["text"] = fundido
                 continue
         blocks.append(dict(b))
     for i, b in enumerate(blocks, start=1):
@@ -281,7 +286,8 @@ def _shape_blocks(raw: List[Dict[str, Any]], max_block_s: float) -> List[Dict[st
     return blocks
 
 
-def parse_output(data: Dict[str, Any], max_block_s: float) -> Dict[str, Any]:
+def parse_output(data: Dict[str, Any], max_block_s: float,
+                 max_chars: int = DEFAULT_MAX_CHARS) -> Dict[str, Any]:
     raw_blocks, words, descartados = [], [], []
     for seg in data.get("transcription", []) or []:
         off = seg.get("offsets") or {}
@@ -306,7 +312,7 @@ def parse_output(data: Dict[str, Any], max_block_s: float) -> Dict[str, Any]:
     return {
         "language": (data.get("result") or {}).get("language"),
         "model_type": (data.get("model") or {}).get("type"),
-        "blocks": _shape_blocks(raw_blocks, max_block_s),
+        "blocks": _shape_blocks(raw_blocks, max_block_s, max_chars),
         "words": words,
         "non_speech_dropped": descartados,
     }
@@ -348,7 +354,7 @@ def transcribe(source: str, *, language: str = "auto", model: str = DEFAULT_MODE
             obs.log("asr_audio_extracted", source=probe["source"])
         raw = _run(binary, mpath, audio, language, max_chars, threads, timeout_s,
                    os.path.join(work, "out"))
-    parsed = parse_output(raw, max_block_s)
+    parsed = parse_output(raw, max_block_s, max_chars)
     elapsed = time.time() - started
 
     result = {
@@ -391,38 +397,75 @@ def compact(blocks: List[Dict[str, Any]], offset: int = 0,
     return "\n".join(linhas), (offset + limit) < len(blocks)
 
 
-def find_cached_by_source(source: str) -> Optional[Dict[str, Any]]:
-    """Transcript já feito para esta mídia, sem saber o modelo/idioma usados.
+def cached_for_source(source: str) -> List[Dict[str, Any]]:
+    """Todos os transcripts em cache desta mídia, do mais desejável ao menos.
 
-    Serve ao `snap="speech"` e ao `subtitle.from_transcript`, que recebem só o caminho
-    da mídia. Se houver mais de um, ganha o de modelo mais forte.
+    A ordem é DETERMINÍSTICA: modelo mais forte primeiro, e entre iguais o mais
+    recente. Antes o desempate era a ordem do `os.listdir`, que é do sistema de
+    arquivos — com várias transcrições do mesmo arquivo em `max_chars` diferentes,
+    o `from_transcript` escolhia uma arbitrária e o resultado mudava de máquina
+    para máquina.
     """
     alvo = os.path.abspath(os.path.expanduser(source))
     ordem = list(MODELS)
-    melhor, melhor_rank = None, -1
+    achados: List[Tuple[int, float, Dict[str, Any]]] = []
     try:
-        nomes = os.listdir(CACHE_DIR)
+        nomes = sorted(os.listdir(CACHE_DIR))
     except OSError:
-        return None
+        return []
     for nome in nomes:
         if not nome.endswith(".json"):
             continue
+        caminho = os.path.join(CACHE_DIR, nome)
         try:
-            with open(os.path.join(CACHE_DIR, nome), encoding="utf-8") as f:
+            with open(caminho, encoding="utf-8") as f:
                 data = json.load(f)
+            mtime = os.path.getmtime(caminho)
         except Exception:
             continue
         if os.path.abspath(str(data.get("source", ""))) != alvo:
             continue
-        rank = ordem.index(data.get("model")) if data.get("model") in ordem else 0
-        if rank > melhor_rank:
-            melhor, melhor_rank = data, rank
-    return melhor
+        rank = ordem.index(data["model"]) if data.get("model") in ordem else -1
+        achados.append((rank, mtime, data))
+    achados.sort(key=lambda t: (t[0], t[1]), reverse=True)
+    return [d for _r, _m, d in achados]
 
 
-def require_cached(source: str) -> Dict[str, Any]:
-    data = find_cached_by_source(source)
+def find_cached_by_source(source: str, *, max_chars: Optional[int] = None,
+                          transcript_id: Optional[str] = None
+                          ) -> Optional[Dict[str, Any]]:
+    """Transcript em cache desta mídia.
+
+    `transcript_id` fixa exatamente qual. `max_chars` prefere a moldagem pedida e
+    só cai para outra se não houver — o que importa para as legendas, onde a
+    moldagem é o que aparece na tela. Para o `snap` é indiferente: as palavras são
+    as mesmas em qualquer moldagem.
+    """
+    candidatos = cached_for_source(source)
+    if not candidatos:
+        return None
+    if transcript_id:
+        return next((d for d in candidatos
+                     if d.get("transcript_id") == transcript_id), None)
+    if max_chars is not None:
+        exato = [d for d in candidatos if d.get("max_chars") == max_chars]
+        if exato:
+            return exato[0]
+    return candidatos[0]
+
+
+def require_cached(source: str, *, max_chars: Optional[int] = None,
+                   transcript_id: Optional[str] = None) -> Dict[str, Any]:
+    data = find_cached_by_source(source, max_chars=max_chars,
+                                 transcript_id=transcript_id)
     if data is None:
+        if transcript_id:
+            raise E.CapcutError(
+                E.TRANSCRIPT_NOT_FOUND,
+                f"Não há transcrição em cache com transcript_id={transcript_id}.",
+                "Use o transcript_id que capcut.media.transcribe devolveu, ou "
+                "omita o parâmetro para usar a transcrição mais recente.",
+                source=source, transcript_id=transcript_id)
         raise E.CapcutError(
             E.TRANSCRIPT_NOT_FOUND,
             f"Não há transcrição em cache para {os.path.basename(source)}.",
