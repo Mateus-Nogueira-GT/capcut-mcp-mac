@@ -1,0 +1,6 @@
+# Runtime: as 6 dependências do L0 (vendor/VectCutAPI), sem acréscimo.
+# O ASR não entra aqui: é o binário whisper.cpp, via brew, não um pacote Python.
+-r vendor/VectCutAPI/requirements.txt
+
+# Testes
+pytest>=8.0

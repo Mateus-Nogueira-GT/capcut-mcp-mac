@@ -17,11 +17,14 @@ Este adaptador corrige isso numa camada só, preservando o upstream intacto.
 ## Uso
 
 ```sh
-git submodule update --init --recursive
+git clone --recurse-submodules <este repositório> && cd capcut-mcp-mac
 uv venv --python 3.12 .venv
-uv pip install --python .venv/bin/python -r vendor/VectCutAPI/requirements.txt
+uv pip install --python .venv/bin/python -r requirements.txt
 PYTHONPATH=src ./.venv/bin/python -m capcut_mcp.server   # fala MCP por stdio
 ```
+
+Se clonou sem `--recurse-submodules`, rode `git submodule update --init
+--recursive` antes — sem o L0 em `vendor/VectCutAPI` nada importa.
 
 Requer FFmpeg (`brew install ffmpeg`), CapCut Desktop instalado, e **pelo menos um
 projeto criado à mão** no CapCut — ele serve de esqueleto real da sua versão.
@@ -71,7 +74,7 @@ fora da superfície MCP. Para expô-los: `CAPCUT_ENABLE_ALL_TOOLS=1`.
 ## Testes
 
 ```sh
-./.venv/bin/python -m pytest tests/ -q
+PYTHONPATH=src ./.venv/bin/python -m pytest tests/ -q
 ```
 
 177 testes. Os que gravam de verdade exigem 2 GiB livres, senão o guarda
