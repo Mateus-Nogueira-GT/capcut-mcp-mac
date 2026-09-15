@@ -649,19 +649,63 @@ def test_fusao_de_blocos_respeita_max_chars():
 
 
 @tem_whisper
-def test_max_chars_e_alvo_e_a_tela_nao_transborda():
-    """O excesso que resta é do binário, que não parte palavra — e está declarado.
+def test_max_chars_e_teto_de_verdade():
+    """O `-ml` do binário é aproximado; a repartição por palavra fecha o teto.
 
-    O que importa é a tela: o subtitle.add quebra em limite de palavra depois,
-    então um bloco acima do alvo vira duas linhas em vez de transbordar.
+    Medido antes: com max_chars=40 saía um bloco de 45 caracteres; com 16, um de
+    20. Agora nenhum valor viola.
     """
-    r = asr.transcribe(VIDEO_FALA, language="pt", max_chars=40)
-    pior = max(len(b["text"]) for b in r["blocks"])
-    assert pior <= 40 * 1.3, f"excesso além do medido (25%): {pior} caracteres"
-    desc = tools.TOOLS["capcut.media.transcribe"]["schema"]["properties"][
-        "max_chars_per_block"]["description"].lower()
-    assert "alvo" in desc and "teto" in desc, \
-        "se o limite é aproximado, a descrição tem de dizer isso"
+    for mc in (12, 16, 20, 26, 32, 40, 60):
+        r = asr.transcribe(VIDEO_FALA, language="pt", max_chars=mc)
+        acima = [b["text"] for b in r["blocks"] if len(b["text"]) > mc]
+        assert not acima, f"max_chars={mc} violado por {acima}"
+
+
+@tem_whisper
+def test_reparticao_preserva_ordem_e_duracao():
+    """Repartir não pode inventar tempo nem bagunçar a ordem."""
+    r = asr.transcribe(VIDEO_FALA, language="pt", max_chars=12)
+    for b in r["blocks"]:
+        assert b["end"] > b["start"], b
+    for a, b in zip(r["blocks"], r["blocks"][1:]):
+        assert b["start"] >= a["end"] - 1e-6, f"blocos se sobrepõem: {a} / {b}"
+    assert r["blocks"][-1]["end"] <= r["duration_s"] + 0.3
+
+
+def test_palavra_maior_que_o_teto_fica_intacta():
+    """Partir no meio da palavra foi o defeito que a Phase 4 já corrigiu.
+
+    Preferir um bloco acima do teto a uma palavra quebrada é decisão consciente:
+    o subtitle.add quebra em linha depois, então na tela vira duas linhas.
+    """
+    bloco = {"start": 0.0, "end": 2.0, "text": "inconstitucionalissimamente"}
+    saida = asr._split_long(bloco, 10)
+    assert len(saida) == 1
+    assert saida[0]["text"] == "inconstitucionalissimamente"
+
+
+def test_reparticao_divide_o_tempo_proporcionalmente():
+    bloco = {"start": 10.0, "end": 14.0, "text": "aaaa bbbb cccc dddd"}
+    saida = asr._split_long(bloco, 9)
+    assert [b["text"] for b in saida] == ["aaaa bbbb", "cccc dddd"]
+    assert saida[0]["start"] == 10.0
+    assert saida[-1]["end"] == 14.0, "o fim do último tem de ser o fim do original"
+    assert saida[0]["end"] == saida[1]["start"], "não pode sobrar buraco"
+
+
+@tem_whisper
+def test_auto_e_idioma_explicito_compartilham_cache():
+    """ACHADO D: `auto` gravava numa chave que o idioma explícito não achava.
+
+    O arquivo era transcrito duas vezes para produzir exatamente o mesmo
+    resultado. Como o idioma detectado é conhecido no fim da transcrição, o
+    registro passou a ser salvo também sob a chave dele.
+    """
+    ra = asr.transcribe(VIDEO_FALA, language="auto")
+    assert ra["language"] == "pt"
+    rp = asr.transcribe(VIDEO_FALA, language="pt")
+    assert rp["cached"] is True, "o idioma explícito tem de reaproveitar o 'auto'"
+    assert rp["blocks"] == ra["blocks"]
 
 
 @tem_whisper
@@ -761,3 +805,52 @@ def test_fingerprint_e_do_conteudo(tmp_path):
     assert asr.fingerprint(a) == asr.fingerprint(b), \
         "arquivos idênticos em caminhos diferentes têm o mesmo fingerprint"
     assert asr.fingerprint(a) != asr.fingerprint(VIDEO_MUDO)
+
+
+@pytest.fixture
+def cache_isolado(tmp_path, monkeypatch):
+    """Cache de transcrição próprio, para o teste não depender do que outros deixaram.
+
+    A primeira versão destes dois testes contava entradas no cache real e
+    quebrava conforme a ordem da suíte — 7 transcrições legítimas de testes
+    anteriores pareciam alias não colapsado.
+    """
+    dir_ = str(tmp_path / "transcripts")
+    os.makedirs(dir_, exist_ok=True)
+    monkeypatch.setattr(asr, "CACHE_DIR", dir_)
+    return dir_
+
+
+@tem_whisper
+def test_alias_de_idioma_nao_conta_como_transcricao_extra(draft, cache_isolado):
+    """O alias que resolveu o achado D criou um falso TRANSCRIPT_AMBIGUOUS.
+
+    `auto` grava também sob a chave do idioma detectado. Sem colapsar, essa
+    segunda chave contava como outra transcrição e o from_transcript avisava
+    sobre uma ambiguidade inexistente — no caminho mais comum de todos.
+    """
+    asr.transcribe(VIDEO_FALA, language="auto")
+    assert len(os.listdir(cache_isolado)) == 2, "o alias deveria ter sido gravado"
+    canonicos = asr.cached_for_source(VIDEO_FALA)
+    assert len(canonicos) == 1, \
+        f"alias não foi colapsado: {[d['transcript_id'] for d in canonicos]}"
+
+    call("capcut.video.cut", draft_id=draft, source=VIDEO_FALA,
+         keep=[[1.0, 5.0], [8.0, 12.0]])
+    _s, bus = call("capcut.subtitle.from_transcript", draft_id=draft,
+                   source=VIDEO_FALA)
+    assert not any(w["code"] == "TRANSCRIPT_AMBIGUOUS" for w in bus.warnings), \
+        "havendo uma única transcrição, não pode avisar ambiguidade"
+
+
+@tem_whisper
+def test_ambiguidade_real_ainda_avisa(draft, cache_isolado):
+    """O colapso do alias não pode calar o aviso quando ele é verdadeiro."""
+    for mc in (20, 40):
+        asr.transcribe(VIDEO_FALA, language="pt", max_chars=mc)
+    assert len(asr.cached_for_source(VIDEO_FALA)) == 2
+    call("capcut.video.cut", draft_id=draft, source=VIDEO_FALA,
+         keep=[[1.0, 5.0], [8.0, 12.0]])
+    _s, bus = call("capcut.subtitle.from_transcript", draft_id=draft,
+                   source=VIDEO_FALA, max_chars_per_block=20)
+    assert any(w["code"] == "TRANSCRIPT_AMBIGUOUS" for w in bus.warnings)

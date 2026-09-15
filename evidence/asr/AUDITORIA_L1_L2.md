@@ -70,9 +70,9 @@ pedido.
 
 **Correção:** a fusão agora exige que o texto resultante caiba no limite.
 
-**Mas a auditoria achou uma segunda causa, e essa não tem correção:** o
-`-ml` do whisper.cpp é limite **aproximado**, não duro — ele não parte palavra,
-então um bloco estoura quando a próxima palavra não cabe. Depois da correção:
+A auditoria achou uma **segunda** causa: o `-ml` do whisper.cpp é limite
+**aproximado** — ele não parte palavra, então um bloco estoura quando a próxima
+não cabe. Depois de corrigir só a fusão, sobrava:
 
 | `max_chars` | maior bloco | excesso |
 |---|---|---|
@@ -83,14 +83,23 @@ então um bloco estoura quando a próxima palavra não cabe. Depois da correçã
 | 40 | 45 | 12% |
 | 60 | 48 | 0% |
 
-O resíduo é do binário. Duas decisões:
+Num primeiro momento eu **declarei** esse resíduo em vez de corrigi-lo, mudando
+a descrição do parâmetro para "alvo, não teto". Estava errado: dava para
+consertar. O `_split_long()` reparte o bloco excedente em **fronteira de
+palavra**, dividindo o tempo em proporção ao número de caracteres. Agora:
 
-1. **A descrição do parâmetro passou a dizer que é alvo, não teto**, com o
-   excesso medido. Prometer um teto que a ferramenta não entrega seria pior que o
-   excesso.
-2. **A tela está protegida de qualquer forma:** o `subtitle.add` quebra em limite
-   de palavra depois (26 caracteres por linha no font_size 8), então um bloco
-   acima do alvo vira duas linhas em vez de transbordar. Verificado: 5 blocos
+| `max_chars` | 12 | 16 | 20 | 26 | 32 | 40 | 60 | 120 |
+|---|---|---|---|---|---|---|---|---|
+| maior bloco | 12 | 15 | 20 | 26 | 31 | 39 | 48 | 48 |
+| acima do teto | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+
+**Teto respeitado em todos os valores.** Os tempos seguem monotônicos, sem
+sobreposição, e o último bloco termina onde o original terminava.
+
+Uma exceção deliberada: **palavra sozinha maior que o teto fica intacta.**
+Partir no meio da palavra foi justamente o defeito que a Phase 4 já corrigiu, e
+o `subtitle.add` quebra em linha depois — na tela vira duas linhas, não
+transbordo. Verificado: 5 blocos
    quebrados, com `SUBTITLE_WRAPPED` avisando.
 
 ---
@@ -132,10 +141,24 @@ no cache naquele momento.
   `transcript_max_chars`, `transcript_id`), aceita `transcript_id` e
   `max_chars_per_block`, e avisa `TRANSCRIPT_AMBIGUOUS` quando há mais de uma.
 
-O `D` original — `language="auto"` e `"pt"` gerando entradas separadas — deixa de
-ter consequência: a busca é determinística e a preferência é explícita. O custo
-que resta é uma transcrição repetida quando se alterna entre `auto` e explícito,
-o que é desperdício de tempo, não erro de resultado.
+### O `D`, que eu também tinha só declarado
+
+Chamei de "sem consequência" porque não erra o resultado — mas transcrevia o
+mesmo arquivo duas vezes para produzir blocos idênticos, e `auto` é o default.
+O idioma **detectado** é conhecido no fim da transcrição, então o registro passou
+a ser salvo também sob a chave dele (e vice-versa). Medido depois:
+
+```
+auto  -> cached=True idioma=pt   (0 ms)
+pt    -> cached=True             (1 ms)
+blocos idênticos: True
+```
+
+**E esse conserto introduziu um defeito novo, pego antes de subir:** o alias
+contava como uma segunda transcrição, e o `from_transcript` passou a avisar
+`TRANSCRIPT_AMBIGUOUS` no caminho mais comum de todos, sobre uma ambiguidade
+inexistente. O `cached_for_source` agora colapsa aliases pelo id canônico. Dois
+testes cobrem os dois lados: o alias não avisa, e a ambiguidade real ainda avisa.
 
 ---
 
@@ -173,13 +196,26 @@ arquivo. Vale como lição sobre onde procurar — o fluxo real, não o código.
 |---|---|---|
 | A — snap cruza trechos, duplica mídia, ninguém avisa | **alta** | corrigido + invariante + aviso |
 | B — delta não descreve o aplicado | baixa | corrigido |
-| C — fusão estoura `max_chars` | média | corrigido; resíduo do binário declarado |
-| D — cache duplicado por idioma | baixa | sem consequência após E |
+| C — fusão estoura `max_chars` | média | corrigido, **teto imposto** por repartição em palavra |
+| D — cache duplicado por idioma | baixa | corrigido por alias do idioma detectado |
 | E — escolha de transcrição arbitrária | média | corrigido + declarado + fixável |
 | F — cache por conteúdo, busca por caminho | **alta** | corrigido + migração de registros antigos |
 
-**11 testes de regressão novos**, cada um citando a medição que o motivou.
-Suíte: **192 testes, 192 passando.**
+**17 testes de regressão novos**, cada um citando a medição que o motivou.
+Suíte: **198 testes, 198 passando**, verificada também em clone limpo do GitHub.
+
+Dois desses testes existem por causa de erros meus durante a própria auditoria:
+o falso `TRANSCRIPT_AMBIGUOUS` que o alias criou, e uma primeira versão dos
+testes de alias que contava entradas no cache real e quebrava conforme a ordem
+da suíte — 7 transcrições legítimas de testes anteriores pareciam alias não
+colapsado. Passaram a usar um cache isolado.
+
+### Duas correções que eu quase deixei como "documentadas"
+
+`C` e `D` foram inicialmente declaradas em vez de consertadas — uma como "alvo,
+não teto", a outra como "sem consequência". Ambas tinham correção viável. Vale
+como registro: declarar uma limitação é honesto quando ela é real, e é
+acomodação quando não é.
 
 ### O que a auditoria não cobriu
 

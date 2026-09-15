@@ -263,17 +263,62 @@ def _tokens_to_words(tokens: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return [w for w in words if w["word"]]
 
 
+def _split_long(block: Dict[str, Any], max_chars: int) -> List[Dict[str, Any]]:
+    """Parte um bloco acima do limite em fronteira de PALAVRA.
+
+    O `-ml N` do whisper.cpp é limite aproximado: ele não parte palavra, então
+    devolve blocos acima de N quando a próxima palavra não cabe. Medido: com
+    `-ml 40` saiu um bloco de 45 caracteres.
+
+    O tempo é repartido em proporção ao número de caracteres de cada pedaço — é
+    aproximação, mas dentro de um bloco de poucos segundos o erro é pequeno, e
+    bem menor que o de deixar a legenda transbordar. Uma palavra sozinha maior
+    que o limite fica intacta: partir no meio dela foi o defeito que a Phase 4
+    já corrigiu uma vez.
+    """
+    texto = block["text"]
+    if len(texto) <= max_chars:
+        return [dict(block)]
+
+    pedacos, atual = [], ""
+    for palavra in texto.split():
+        candidato = f"{atual} {palavra}".strip()
+        if atual and len(candidato) > max_chars:
+            pedacos.append(atual)
+            atual = palavra
+        else:
+            atual = candidato
+    if atual:
+        pedacos.append(atual)
+    if len(pedacos) <= 1:
+        return [dict(block)]           # uma palavra só: nada a fazer
+
+    total = sum(len(p) for p in pedacos)
+    dur = block["end"] - block["start"]
+    saida, cursor = [], block["start"]
+    for i, p in enumerate(pedacos):
+        fim = block["end"] if i == len(pedacos) - 1 \
+            else round(cursor + dur * len(p) / total, 3)
+        saida.append({**block, "start": round(cursor, 3), "end": fim, "text": p})
+        cursor = fim
+    return saida
+
+
 def _shape_blocks(raw: List[Dict[str, Any]], max_block_s: float,
                   max_chars: int = DEFAULT_MAX_CHARS) -> List[Dict[str, Any]]:
-    """Funde blocos curtos demais no anterior, respeitando tempo E comprimento.
+    """Molda os blocos: parte os longos, funde os curtos, respeita o limite.
 
-    O `-ml` do binário limita o comprimento de cada bloco que ELE emite, mas a
-    fusão aqui acontece depois — e sem conferir o comprimento ela estourava o
-    limite que a tool anuncia. Medido: com `max_chars=16` saía um bloco de 33
-    caracteres, o dobro do pedido, que na tela quebra em duas linhas sem aviso.
+    `max_chars` é TETO, não sugestão. Duas coisas o violavam: a fusão de blocos
+    curtos, que não reconferia o comprimento (com `max_chars=16` saía um bloco
+    de 33), e o próprio binário, cujo `-ml` é aproximado. A partição por palavra
+    fecha a segunda.
     """
-    blocks: List[Dict[str, Any]] = []
+    partidos: List[Dict[str, Any]] = []
     for b in raw:
+        partidos.extend(_split_long(b, max_chars))
+
+    blocks: List[Dict[str, Any]] = []
+    for b in partidos:
         if blocks:
             prev = blocks[-1]
             fundido = f"{prev['text']} {b['text']}".strip()
@@ -387,6 +432,20 @@ def transcribe(source: str, *, language: str = "auto", model: str = DEFAULT_MODE
         "cached": False,
     }
     save_cached(tid, result)
+
+    # `language="auto"` (o default) gravava numa chave que uma chamada posterior
+    # com o idioma explícito nunca encontrava, e o arquivo era transcrito de novo
+    # para produzir exatamente o mesmo resultado. Como o idioma DETECTADO é
+    # conhecido aqui, o registro também é salvo sob a chave dele — e vice-versa,
+    # para que 'auto' aproveite o que já foi feito com idioma explícito.
+    detectado = parsed["language"]
+    if detectado:
+        for outro in ({detectado} if language == "auto" else {"auto"}):
+            alias = transcript_id(probe["source"], model, outro, max_chars)
+            if alias != tid and load_cached(alias) is None:
+                save_cached(alias, {**result, "transcript_id": alias,
+                                    "alias_of": tid})
+
     obs.log("asr_done", transcript_id=tid, model=model, blocks=len(parsed["blocks"]),
             words=len(parsed["words"]), elapsed_s=result["elapsed_s"])
     if parsed["non_speech_dropped"]:
@@ -451,7 +510,19 @@ def cached_for_source(source: str) -> List[Dict[str, Any]]:
         rank = ordem.index(data["model"]) if data.get("model") in ordem else -1
         achados.append((rank, mtime, data))
     achados.sort(key=lambda t: (t[0], t[1]), reverse=True)
-    return [d for _r, _m, d in achados]
+
+    # Um alias de idioma (`auto` <-> idioma detectado) é o MESMO transcript sob
+    # outra chave. Sem colapsar, ele contava como uma segunda transcrição e o
+    # `from_transcript` avisava TRANSCRIPT_AMBIGUOUS no caminho mais comum,
+    # sobre uma ambiguidade que não existe.
+    vistos, unicos = set(), []
+    for _r, _m, d in achados:
+        canonico = d.get("alias_of") or d["transcript_id"]
+        if canonico in vistos:
+            continue
+        vistos.add(canonico)
+        unicos.append(d)
+    return unicos
 
 
 def find_cached_by_source(source: str, *, max_chars: Optional[int] = None,

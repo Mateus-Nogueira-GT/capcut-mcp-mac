@@ -843,14 +843,15 @@ TOOLS.update({
                                           "palavra: infla muito a resposta."},
                 "max_chars_per_block": {"type": "integer", "minimum": 12, "maximum": 120,
                                         "default": 26,
-                                        "description": "Alvo de comprimento do bloco. 26 "
-                                                       "foi medido na tela do CapCut. É "
-                                                       "ALVO, não teto: o whisper.cpp não "
-                                                       "parte palavra, então um bloco pode "
-                                                       "passar do limite — medido, até uns "
-                                                       "25% acima. O subtitle.add quebra "
-                                                       "em linha depois, então na tela não "
-                                                       "transborda."},
+                                        "description": "Teto de caracteres por bloco de "
+                                                       "legenda. 26 foi medido na tela do "
+                                                       "CapCut. O limite é respeitado: o "
+                                                       "-ml do whisper.cpp é aproximado, "
+                                                       "então blocos acima do teto são "
+                                                       "repartidos em fronteira de palavra. "
+                                                       "Uma palavra sozinha maior que o "
+                                                       "teto fica intacta — partir no meio "
+                                                       "dela seria pior."},
                 "max_block_seconds": {"type": "number", "default": 4.0},
                 "offset": {"type": "integer", "minimum": 0, "default": 0,
                            "description": "Paginação, para transcript longo."},
