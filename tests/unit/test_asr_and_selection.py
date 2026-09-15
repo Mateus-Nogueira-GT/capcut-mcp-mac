@@ -547,14 +547,13 @@ def test_presets_com_contraste_gravam_stroke_ou_fundo(draft):
             registry.discard(d["draft_id"])
 
 
-@pytest.mark.xfail(reason="ACHADO ABERTO do AC7: a borda do preset 'outline' é "
-                          "0.012, contra 0.08 do default do L0 — na tela a legenda "
-                          "sai ilegível sobre fundo claro. O valor novo precisa ser "
-                          "MEDIDO no projeto 'Borda Calibra', não escolhido de "
-                          "cabeça. Este xfail vira passe quando isso acontecer.",
-                   strict=True)
 def test_borda_do_outline_e_espessa_o_bastante(draft):
-    """Piso provisório: a borda do default não deveria ser mais fina que a do L0."""
+    """A borda do default tem de dar contraste de verdade.
+
+    O piso 0.08 saiu de medição na tela ("Borda Calibra", 6/20/40/70 sobre barras
+    claras): abaixo disso o contorno desaparece e a legenda branca fica ilegível
+    sobre fundo claro. Foi o defeito que o AC7 revelou.
+    """
     assert _stroke_do_preset(draft, "outline") >= 0.08
 
 

@@ -404,12 +404,18 @@ def replay(script: Any, draft_id: str, plan: list, bus: obs.WarningBus) -> int:
 # --------------------------------------------------------------- legendas
 # Presets com contraste embutido. Os defaults do upstream são border_width=0.0 e
 # background_alpha=0.0 — ou seja, texto pelado sobre vídeo, ilegível na prática.
+# border_width está na escala 0-100 do CapCut, e o L0 a converte com
+# `width / 100 * 0.2` — a linha que ele mesmo comenta como possivelmente errada.
+# 40.0 (stroke 0.080) foi MEDIDO na tela no projeto "Borda Calibra", comparando
+# 6 / 20 / 40 / 70 simultaneamente sobre barras claras: em 6 não há contorno
+# algum, 20 é fino para legenda pequena, 70 entope os vazados do "ç" e funde
+# letras vizinhas. 40 é também o default do próprio upstream.
 SUBTITLE_PRESETS: Dict[str, Dict[str, Any]] = {
-    "outline": {"border_width": 6.0, "border_color": "#000000",
+    "outline": {"border_width": 40.0, "border_color": "#000000",
                 "background_alpha": 0.0},
     "boxed": {"border_width": 0.0, "background_color": "#000000",
               "background_alpha": 0.65, "background_round_radius": 12.0},
-    "outline_boxed": {"border_width": 5.0, "border_color": "#000000",
+    "outline_boxed": {"border_width": 30.0, "border_color": "#000000",
                       "background_color": "#000000", "background_alpha": 0.45,
                       "background_round_radius": 12.0},
     "plain": {},                       # sem contraste: só com escolha explícita
