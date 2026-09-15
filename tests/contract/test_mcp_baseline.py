@@ -101,13 +101,15 @@ def test_initialize_cai_para_default_se_protocolo_desconhecido():
 
 # 2 -------------------------------------------------------------------------
 def test_tools_list_expoe_apenas_o_fluxo(client):
-    """Superfície enxuta: cortar, legendar e texto. Nada além do escopo."""
+    """Superfície enxuta: transcrever, cortar, legendar e texto. Nada além."""
     tools = client.rpc("tools/list")["result"]["tools"]
     nomes = [t["name"] for t in tools]
     assert nomes == [
-        "capcut.system.doctor", "capcut.media.probe", "capcut.draft.create",
-        "capcut.video.cut", "capcut.subtitle.add", "capcut.text.add",
-        "capcut.text.add_many", "capcut.draft.validate", "capcut.draft.save"]
+        "capcut.system.doctor", "capcut.media.probe", "capcut.media.transcribe",
+        "capcut.draft.create", "capcut.video.cut",
+        "capcut.subtitle.add", "capcut.subtitle.from_transcript",
+        "capcut.text.add", "capcut.text.add_many",
+        "capcut.draft.validate", "capcut.draft.save"]
     for t in tools:
         assert t["inputSchema"]["additionalProperties"] is False, t["name"]
         assert t["description"] and len(t["description"]) > 80, t["name"]

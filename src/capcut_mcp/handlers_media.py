@@ -15,6 +15,7 @@ na 9.4.1, não os 8.0 do upstream nem os 24/48 da documentação dele.
 """
 from __future__ import annotations
 
+import os
 from typing import Any, Dict, Optional
 
 from . import catalog, errors as E, media, obs, registry
@@ -593,6 +594,32 @@ def apply_cut(script: Any, draft_id: str, a: Dict[str, Any],
                 f"Os trechos [{a0}, {a1}] e [{b0}, ...] se sobrepõem na mídia.",
                 "Trechos a manter não podem se sobrepor.")
 
+    # --- encostar as pontas na fronteira de fala (spec §2.2)
+    snap_mode = a.get("snap", "none")
+    snapped_report = []
+    if snap_mode == "speech":
+        from . import asr, timemap
+        palavras = asr.require_cached(probe["source"]).get("words") or []
+        tol = float(a.get("snap_tolerance", 0.5))
+        pad = float(a.get("snap_padding", 0.15))
+        limite = probe["duration_s"] or 0.0
+        ajustados = []
+        for s0, s1 in ordered:
+            r = timemap.snap_range(palavras, s0, s1, tolerance=tol, padding=pad)
+            novo0, novo1 = r["start"], min(r["end"], limite) if limite else r["end"]
+            ajustados.append((novo0, novo1))
+            snapped_report.append({"requested": [s0, s1], "applied": [novo0, novo1],
+                                   "delta_start_s": r["delta_start_s"],
+                                   "delta_end_s": r["delta_end_s"],
+                                   "snapped": r["snapped"]})
+        ordered = ajustados
+        moveram = [r for r in snapped_report if r["snapped"]]
+        if moveram:
+            bus.add("CUT_SNAPPED_TO_SPEECH",
+                    f"{len(moveram)} de {len(ordered)} ponta(s) foram movidas para a "
+                    "fronteira de palavra, para não cortar no meio da fala.",
+                    ajustes=moveram)
+
     speed = float(a.get("speed", 1.0))
     track = a.get("track") or TRACK_VIDEO
     gap = float(a.get("gap", 0.0))
@@ -638,6 +665,8 @@ def apply_cut(script: Any, draft_id: str, a: Dict[str, Any],
         "kept": created,
         "removed_from_source_s": removed,
         "gap_s": gap,
+        "snap": snap_mode,
+        "snapped": snapped_report,
     }
 
 
@@ -701,5 +730,73 @@ def apply_text_batch(script: Any, draft_id: str, a: Dict[str, Any],
     }
 
 
+def apply_subtitle_from_transcript(script: Any, draft_id: str, a: Dict[str, Any],
+                                   bus: obs.WarningBus) -> Dict[str, Any]:
+    """Legendas do transcript, com os tempos remapeados para a timeline cortada.
+
+    É a peça que evita o erro silencioso da spec §2.3: o transcript está em tempo da
+    mídia original, e depois de um corte os tempos da timeline são outros. Passar os
+    blocos direto para o subtitle.add produziria legenda dessincronizada com JSON
+    válido — nada detectaria.
+    """
+    from . import asr, timemap
+
+    source = a["source"]
+    transcript = asr.require_cached(source)
+    mapa = timemap.build(script, source)
+    if not mapa:
+        raise E.CapcutError(
+            E.SOURCE_NOT_FOUND,
+            f"Nenhum segmento de {os.path.basename(source)} está na timeline.",
+            "Adicione o vídeo (capcut.video.cut ou capcut.video.add) antes das legendas.",
+            source=source)
+
+    straddle = a.get("straddle", "truncate")
+    remapeados, descartados, truncados, mapping = [], 0, 0, []
+    for b in transcript["blocks"]:
+        m = timemap.map_block(mapa, b["start"], b["end"], straddle)
+        if m is None:
+            descartados += 1
+            continue
+        if m["truncated"]:
+            truncados += 1
+        remapeados.append({"start": round(m["timeline_start"], 3),
+                           "end": round(m["timeline_end"], 3), "text": b["text"]})
+        mapping.append({"source_range": [b["start"], b["end"]],
+                        "timeline_range": [round(m["timeline_start"], 3),
+                                           round(m["timeline_end"], 3)]})
+    if not remapeados:
+        raise E.CapcutError(
+            E.NO_SPEECH_DETECTED,
+            "Nenhuma legenda sobreviveu ao corte: toda a fala caiu em trecho removido.",
+            "Revise os trechos mantidos, ou use capcut.subtitle.add com blocos próprios.",
+            blocks_dropped=descartados)
+
+    estilo = {k: v for k, v in a.items()
+              if k not in ("source", "straddle", "draft_id")}
+    info = apply_subtitle(script, draft_id, dict(estilo, segments=remapeados), bus)
+
+    if descartados:
+        bus.add("CAPTIONS_DROPPED_BY_CUT",
+                f"{descartados} legenda(s) caíram em trecho removido e foram "
+                "descartadas.", dropped=descartados)
+    if truncados:
+        bus.add("CAPTIONS_TRUNCATED_BY_CUT",
+                f"{truncados} legenda(s) atravessavam a fronteira do corte e foram "
+                "encurtadas para a parte mantida.", truncated=truncados)
+    info.update({
+        "kind": "subtitle_from_transcript",
+        "transcript_id": transcript["transcript_id"],
+        "blocks_in_transcript": len(transcript["blocks"]),
+        "blocks_dropped": descartados,
+        "blocks_truncated": truncados,
+        "kept_source_s": timemap.total_kept_s(mapa),
+        "mapping": mapping[:50],
+        "remapped": True,
+    })
+    return info
+
+
 APPLIERS["cut"] = apply_cut
+APPLIERS["subtitle_from_transcript"] = apply_subtitle_from_transcript
 APPLIERS["text_batch"] = apply_text_batch

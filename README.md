@@ -26,26 +26,44 @@ PYTHONPATH=src ./.venv/bin/python -m capcut_mcp.server   # fala MCP por stdio
 Requer FFmpeg (`brew install ffmpeg`), CapCut Desktop instalado, e **pelo menos um
 projeto criado à mão** no CapCut — ele serve de esqueleto real da sua versão.
 
+Para transcrever, também `brew install whisper-cpp` e um modelo baixado em
+`~/Library/Application Support/capcut-mcp/models/`. O `capcut.system.doctor` diz
+o que falta e o comando exato. A transcrição roda **local**: nada sai da máquina.
+
 ## Escopo
 
-Cortar vídeo, legendar, e colocar textos em momentos pré-determinados. Nada além disso.
+Transcrever a fala, cortar vídeo, legendar e colocar textos em momentos
+pré-determinados. Nada além disso.
 
-## Tools expostas (9)
+## Tools expostas (11)
 
 | Tool | O que faz |
 |---|---|
-| `capcut.system.doctor` | Diagnóstico: versão do app, diretório de drafts, projeto de referência, ffprobe, disco |
+| `capcut.system.doctor` | Diagnóstico: versão do app, diretório de drafts, projeto de referência, ffprobe, disco, whisper.cpp e modelos |
 | `capcut.media.probe` | Duração, dimensões e formato reais, via ffprobe, em lote |
+| `capcut.media.transcribe` | Transcreve a fala com timestamps (whisper.cpp local), com cache e paginação |
 | `capcut.draft.create` | Cria o draft e devolve o `draft_id` |
-| `capcut.video.cut` | Corta declarando os trechos que **ficam**: `keep=[[0,3],[5,8]]` |
+| `capcut.video.cut` | Corta declarando os trechos que **ficam**: `keep=[[0,3],[5,8]]`; `snap="speech"` não parte palavra |
 | `capcut.subtitle.add` | Legendas de SRT (arquivo, URL ou inline) ou de `segments=[{start,end,text}]` |
+| `capcut.subtitle.from_transcript` | Legendas do transcript **remapeadas** para a timeline cortada |
 | `capcut.text.add` | Um texto, com estilo completo |
 | `capcut.text.add_many` | Vários textos em momentos pré-determinados, estilo compartilhado |
-| `capcut.draft.validate` | 11 regras de verificação antes de gravar |
+| `capcut.draft.validate` | 13 regras de verificação antes de gravar |
 | `capcut.draft.save` | Valida e grava no formato multi-timeline que o CapCut 9.x exige |
 
+### A armadilha de tempo, que vale ler antes de usar
+
+O transcript está em tempo da **mídia original**. Depois de um corte, a timeline
+tem outros tempos. Passar os blocos do `transcribe` direto para o `subtitle.add`
+produz legenda dessincronizada **com JSON perfeitamente válido** — nada acusa.
+Por isso existe o `from_transcript`, que remapeia, descarta o que caiu em trecho
+removido e conta quantos. O `validate` avisa (`V_CAPTION_DESYNC_RISK`) quando há
+corte e legenda que não passou por ele.
+
 **Não existe:** editar, mover ou remover segmento já adicionado; imagem, áudio,
-efeitos, transições e keyframes; renderizar vídeo; recarregar o CapCut.
+efeitos, transições e keyframes; renderizar vídeo; recarregar o CapCut. A
+**escolha** dos trechos também não é da ferramenta: ela transcreve e corta o que
+você pedir — o critério está nas `instructions` do servidor.
 
 Imagem, áudio, catálogos, `inspect` e `rebuild` continuam **implementados e testados**,
 fora da superfície MCP. Para expô-los: `CAPCUT_ENABLE_ALL_TOOLS=1`.
@@ -55,3 +73,7 @@ fora da superfície MCP. Para expô-los: `CAPCUT_ENABLE_ALL_TOOLS=1`.
 ```sh
 ./.venv/bin/python -m pytest tests/ -q
 ```
+
+177 testes. Os que gravam de verdade exigem 2 GiB livres, senão o guarda
+`DISK_FULL` os reprova de propósito. Medições e verificações visuais ficam em
+`../evidence/`.

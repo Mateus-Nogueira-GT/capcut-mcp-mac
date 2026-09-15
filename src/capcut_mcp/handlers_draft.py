@@ -198,3 +198,53 @@ def draft_validate(a: Dict[str, Any], bus: obs.WarningBus) -> Dict[str, Any]:
                 codes=[i["code"] for i in report["issues"]
                        if i["severity"] == V.ERROR])
     return report
+
+
+# --------------------------------------------------------- media.transcribe
+def media_transcribe(a: Dict[str, Any], bus: obs.WarningBus) -> Dict[str, Any]:
+    from . import asr
+
+    fmt = a.get("format", "blocks")
+    offset, limit = int(a.get("offset", 0)), int(a.get("limit", 200))
+    r = asr.transcribe(
+        a["source"],
+        language=a.get("language", "auto"),
+        model=a.get("model", asr.DEFAULT_MODEL),
+        max_chars=int(a.get("max_chars_per_block", asr.DEFAULT_MAX_CHARS)),
+        max_block_s=float(a.get("max_block_seconds", asr.DEFAULT_MAX_BLOCK_S)),
+        refresh=bool(a.get("refresh", False)),
+        bus=bus,
+    )
+    compact, truncated = asr.compact(r["blocks"], offset, limit)
+    pagina = r["blocks"][offset:offset + limit]
+    out: Dict[str, Any] = {
+        "transcript_id": r["transcript_id"],
+        "source": r["source"],
+        "language": r["language"],
+        "duration_s": r["duration_s"],
+        "model": r["model"],
+        "block_count": r["block_count"],
+        "word_count": r["word_count"],
+        "elapsed_s": r["elapsed_s"],
+        "realtime_factor": r.get("realtime_factor"),
+        "cached": r["cached"],
+        "offset": offset,
+        "limit": limit,
+        "truncated": truncated,
+        "compact": compact,
+        "note": "Os 'segments' vão direto para capcut.subtitle.add. Se você for CORTAR "
+                "o vídeo, use capcut.subtitle.from_transcript no lugar: ela remapeia os "
+                "tempos para a timeline cortada.",
+    }
+    if fmt in ("blocks", "both"):
+        out["segments"] = [{"start": b["start"], "end": b["end"], "text": b["text"]}
+                           for b in pagina]
+    if fmt in ("words", "both"):
+        ini = pagina[0]["start"] if pagina else 0.0
+        fim = pagina[-1]["end"] if pagina else 0.0
+        out["words"] = [w for w in r["words"] if ini <= w["start"] <= fim]
+    if truncated:
+        bus.add("TRANSCRIPT_TRUNCATED",
+                f"Mostrando {len(pagina)} de {r['block_count']} blocos. Use offset para "
+                "paginar.", offset=offset, limit=limit, total=r["block_count"])
+    return out

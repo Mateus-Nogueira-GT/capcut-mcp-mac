@@ -33,6 +33,8 @@ def _issue(code: str, severity: str, message: str, suggestion: str = "",
 def validate(script: Any, entry: Dict[str, Any]) -> Dict[str, Any]:
     issues: List[Dict[str, Any]] = []
     tracks = script.tracks
+    issues += _check_caption_sync(entry)
+    issues += _check_cut_mid_word(entry)
 
     # ---------------------------------------------------------- vazio
     total = sum(len(t.segments) for t in tracks.values())
@@ -158,6 +160,75 @@ def validate(script: Any, entry: Dict[str, Any]) -> Dict[str, Any]:
                 "ou 1080x1080.", width=w, height=h))
 
     return _summary(issues)
+
+
+def _check_caption_sync(entry: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Rede contra o erro silencioso de legenda dessincronizada (spec §2.5).
+
+    Se o draft tem corte e as legendas NÃO vieram do `from_transcript`, os tempos
+    provavelmente estão em tempo da mídia original em vez da timeline.
+    """
+    plano = entry.get("plan", [])
+    ops = [p.get("op") for p in plano]
+    tem_corte = "cut" in ops or sum(1 for o in ops if o == "video") > 1
+    legenda_crua = "subtitle" in ops
+    legenda_remapeada = "subtitle_from_transcript" in ops
+    if tem_corte and legenda_crua and not legenda_remapeada:
+        return [_issue(
+            "V_CAPTION_DESYNC_RISK", WARNING,
+            "O draft tem corte e legendas que não passaram pelo remapeamento de tempo.",
+            "Se as legendas vieram de um transcript da mídia original, elas estão "
+            "dessincronizadas. Use capcut.subtitle.from_transcript, que remapeia. "
+            "Se os tempos já são da timeline cortada, ignore este aviso.",
+            ops=ops)]
+    return []
+
+
+def _check_cut_mid_word(entry: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Corte que caiu no meio de uma palavra falada (spec §2.2).
+
+    Só opina quando já existe transcrição em cache para aquela mídia — a validação
+    nunca dispara ASR. Sem transcript, não há como saber, e o silêncio é honesto.
+    """
+    from . import asr
+
+    achados: List[Dict[str, Any]] = []
+    for passo in entry.get("plan", []):
+        if passo.get("op") != "cut":
+            continue
+        args = passo.get("args", {}) or {}
+        if args.get("snap") == "speech":
+            continue                      # já encostado na fala por construção
+        source = args.get("source")
+        if not source:
+            continue
+        cache = asr.find_cached_by_source(source)
+        if not cache:
+            continue
+        palavras = cache.get("words") or []
+        if not palavras:
+            continue
+        for par in args.get("keep") or []:
+            try:
+                pontas = (("início", float(par[0])), ("fim", float(par[1])))
+            except (TypeError, ValueError, IndexError):
+                continue
+            for rotulo, t in pontas:
+                dentro = next((w for w in palavras
+                               if w["start"] + 0.02 < t < w["end"] - 0.02), None)
+                if dentro:
+                    achados.append((rotulo, t, dentro))
+    if not achados:
+        return []
+    amostra = [{"ponta": r, "t_s": round(t, 3), "palavra": w.get("word", "").strip(),
+                "palavra_s": [round(w["start"], 3), round(w["end"], 3)]}
+               for r, t, w in achados[:6]]
+    return [_issue(
+        "V_CUT_MID_WORD", INFO,
+        f"{len(achados)} ponta(s) de corte caem no meio de uma palavra falada.",
+        "O corte vai soar truncado. Repita o capcut.video.cut com snap='speech', "
+        "que move as pontas para a fronteira de palavra mais próxima.",
+        pontas=amostra)]
 
 
 def _summary(issues: List[Dict[str, Any]]) -> Dict[str, Any]:

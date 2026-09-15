@@ -37,6 +37,22 @@ def doctor(_: Dict[str, Any], bus: obs.WarningBus) -> Dict[str, Any]:
     if not ffprobe:
         bus.add("FFPROBE_MISSING", "ffprobe não está no PATH; o save vai falhar.",
                 fix="brew install ffmpeg")
+    from . import asr as _asr
+    out["whisper_cli"] = shutil.which(_asr.BIN)
+    out["asr_models_installed"] = _asr.installed_models()
+    out["asr_models_dir"] = _asr.MODELS_DIR
+    out["asr_default_model"] = _asr.DEFAULT_MODEL
+    if not out["whisper_cli"]:
+        bus.add("ASR_UNAVAILABLE",
+                "whisper.cpp não está instalado; a transcrição vai falhar.",
+                fix="brew install whisper-cpp")
+    elif _asr.DEFAULT_MODEL not in out["asr_models_installed"]:
+        spec = _asr.MODELS[_asr.DEFAULT_MODEL]
+        bus.add("ASR_MODEL_MISSING",
+                f"O modelo default '{_asr.DEFAULT_MODEL}' ({spec['mb']} MB) não está "
+                "baixado.",
+                fix=f"curl -L -o '{_asr.MODELS_DIR}/{spec['file']}' "
+                    + _asr.MODEL_URL.format(file=spec["file"]))
     try:
         inst = profile.detect()
         free = deployer._free_bytes(inst.projects_dir)
@@ -299,9 +315,11 @@ TOOLS: Dict[str, Dict[str, Any]] = {
 ENABLED_TOOLS = (
     "capcut.system.doctor",
     "capcut.media.probe",
+    "capcut.media.transcribe",
     "capcut.draft.create",
     "capcut.video.cut",
     "capcut.subtitle.add",
+    "capcut.subtitle.from_transcript",
     "capcut.text.add",
     "capcut.text.add_many",
     "capcut.draft.validate",
@@ -712,6 +730,17 @@ TOOLS.update({
                                                   "Omitir anexa ao fim da track."},
                 "gap": {"type": "number", "minimum": 0, "default": 0.0,
                         "description": "Segundos entre os trechos. 0 = encadeado."},
+                "snap": {"type": "string", "enum": ["none", "speech"], "default": "none",
+                         "description": "Com 'speech', encosta as pontas na fronteira "
+                                        "de palavra para não cortar no meio da fala. "
+                                        "Exige transcrição feita antes "
+                                        "(capcut.media.transcribe)."},
+                "snap_tolerance": {"type": "number", "minimum": 0, "default": 0.5,
+                                   "description": "Quanto cada ponta pode se mover, em "
+                                                  "segundos."},
+                "snap_padding": {"type": "number", "minimum": 0, "default": 0.15,
+                                 "description": "Folga antes e depois da fala, para não "
+                                                "cortar a respiração."},
                 "speed": {"type": "number", "default": 1.0},
                 "volume": {"type": "number", "minimum": 0, "maximum": 2, "default": 1.0},
                 "scale_x": {"type": "number", "default": 1.0},
@@ -779,6 +808,95 @@ TOOLS.update({
                 "outro_animation": {"type": "string"},
             },
             "required": ["draft_id", "items"], "additionalProperties": False,
+        },
+    },
+    "capcut.media.transcribe": {
+        "handler": _HD.media_transcribe,
+        "title": "Transcrever a fala do vídeo",
+        "description": (
+            "Transcreve a fala com timestamps, usando whisper.cpp local — nada é "
+            "enviado para fora da máquina. Devolve 'segments' no formato que "
+            "capcut.subtitle.add consome, 'compact' para você LER e escolher os cortes, "
+            "e opcionalmente 'words' com timestamp por palavra. O resultado fica em "
+            "cache: chamar de novo é instantâneo. "
+            "IMPORTANTE: se você for cortar o vídeo, não passe estes 'segments' para o "
+            "subtitle.add — use capcut.subtitle.from_transcript, que remapeia os tempos "
+            "para a timeline cortada. Sem isso a legenda fica dessincronizada."
+        ),
+        "schema": {
+            "type": "object",
+            "properties": {
+                "source": {"type": "string",
+                           "description": "Caminho absoluto do vídeo ou áudio. Vídeo tem "
+                                          "o áudio extraído automaticamente."},
+                "language": {"type": "string", "default": "auto",
+                             "description": "'auto' detecta; ou 'pt', 'en', 'es'..."},
+                "model": {"type": "string",
+                          "enum": ["tiny", "base", "small", "medium"],
+                          "default": "small",
+                          "description": "'small' é o default: medido nesta máquina, "
+                                         "pontua corretamente e roda a ~8x o tempo real. "
+                                         "'tiny' e 'base' saem sem pontuação de frase."},
+                "format": {"type": "string", "enum": ["blocks", "words", "both"],
+                           "default": "blocks",
+                           "description": "'words' só quando precisar de timestamp por "
+                                          "palavra: infla muito a resposta."},
+                "max_chars_per_block": {"type": "integer", "minimum": 12, "maximum": 120,
+                                        "default": 26,
+                                        "description": "Molda o bloco de legenda. 26 foi "
+                                                       "medido na tela do CapCut."},
+                "max_block_seconds": {"type": "number", "default": 4.0},
+                "offset": {"type": "integer", "minimum": 0, "default": 0,
+                           "description": "Paginação, para transcript longo."},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 2000,
+                          "default": 200},
+                "refresh": {"type": "boolean", "default": False,
+                            "description": "Ignora o cache e transcreve de novo."},
+            },
+            "required": ["source"], "additionalProperties": False,
+        },
+    },
+    "capcut.subtitle.from_transcript": {
+        "handler": _media_handler("subtitle_from_transcript"),
+        "title": "Legendas do transcript, sincronizadas com o corte",
+        "description": (
+            "Cria as legendas a partir da transcrição em cache, REMAPEANDO os tempos da "
+            "mídia original para a timeline cortada. Use sempre que houver corte: o "
+            "transcript está em tempo da mídia, e depois de cortar os tempos da timeline "
+            "são outros — passar os blocos direto produz legenda dessincronizada sem que "
+            "nada acuse o erro. "
+            "Descarta os blocos que caíram em trecho removido e encurta os que "
+            "atravessam a fronteira do corte, informando quantos em cada caso. "
+            "Exige capcut.media.transcribe antes, e o vídeo já na timeline."
+        ),
+        "schema": {
+            "type": "object",
+            "properties": {
+                "draft_id": {"type": "string"},
+                "source": {"type": "string",
+                           "description": "A mesma mídia que foi transcrita e cortada."},
+                "track": {"type": "string", "default": _HM.TRACK_SUBTITLE},
+                "straddle": {"type": "string",
+                             "enum": ["truncate", "drop", "keep_partial"],
+                             "default": "truncate",
+                             "description": "O que fazer com a legenda que atravessa a "
+                                            "fronteira do corte."},
+                "style": {"type": "string", "enum": sorted(_HM.SUBTITLE_PRESETS),
+                          "default": _HM.DEFAULT_SUBTITLE_PRESET},
+                "font": {"type": "string",
+                         "description": "Omitir usa a fonte padrão do CapCut, que "
+                                        "renderiza acentuação portuguesa corretamente."},
+                "font_size": {"type": "number", "minimum": 1, "maximum": 100,
+                              "default": _HM.SUBTITLE_FONT_SIZE},
+                "font_color": {"type": "string", "default": "#FFFFFF"},
+                "transform_x": {"type": "number", "default": 0.0},
+                "transform_y": {"type": "number", "default": -0.8},
+                "align": {"type": "integer", "enum": [0, 1, 2], "default": 1},
+                "bold": {"type": "boolean", "default": False},
+                "line_spacing": {"type": "number", "default": 0.25},
+                "max_chars_per_line": {"type": "integer", "minimum": 12, "maximum": 120},
+            },
+            "required": ["draft_id", "source"], "additionalProperties": False,
         },
     },
     "capcut.draft.validate": {

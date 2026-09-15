@@ -36,7 +36,16 @@ from . import obs
 from .profile import Installation
 from .upstream import _save_draft_impl, inject_profile, update_cache
 
-MIN_FREE_BYTES = 2 * 1024**3  # 2 GiB (WI-0.11)
+# O guarda de disco existe porque o disco desta máquina já chegou a 0 byte DUAS
+# vezes durante o desenvolvimento, com o CapCut aberto. Ele não é teórico.
+#
+# Mas 2 GiB fixos recusavam salvar um projeto de 200 KB num disco com 300 MB
+# livres, o que é errado na outra direção. A exigência agora é derivada do que o
+# save realmente escreve — os assets são COPIADOS para dentro do projeto — com
+# uma folga igual ao dobro disso e um piso para o CapCut respirar ao abrir.
+MIN_FREE_FLOOR = 512 * 1024**2      # 512 MiB de piso, sempre
+COPY_SAFETY_FACTOR = 2.5            # assets copiados + margem do próprio app
+MIN_FREE_BYTES = 2 * 1024**3        # teto histórico, mantido para referência
 _SAFE_NAME = re.compile(r"^[^/\\:]{1,120}$")
 
 
@@ -54,6 +63,28 @@ def sanitize_project_name(name: str) -> str:
 def _free_bytes(path: str) -> int:
     st = os.statvfs(path)
     return st.f_bavail * st.f_frsize
+
+
+def _assets_bytes(script: Any) -> int:
+    """Soma o que o save vai copiar para dentro do projeto."""
+    total, vistos = 0, set()
+    for kind in ("videos", "audios", "images"):
+        for mat in getattr(script.materials, kind, []) or []:
+            for attr in ("remote_url", "path", "replace_path"):
+                caminho = getattr(mat, attr, None)
+                if not caminho or str(caminho).startswith(("http://", "https://")):
+                    continue
+                real = os.path.realpath(str(caminho))
+                if real in vistos or not os.path.isfile(real):
+                    continue
+                vistos.add(real)
+                total += os.path.getsize(real)
+                break
+    return total
+
+
+def required_bytes(script: Any) -> int:
+    return max(MIN_FREE_FLOOR, int(_assets_bytes(script) * COPY_SAFETY_FACTOR))
 
 
 def _rewrite_content(paths: List[str], new_version: str) -> None:
@@ -106,13 +137,17 @@ def save(script: Any, draft_id: str, project_name: str, inst: Installation,
             path=target,
         )
     free = _free_bytes(inst.projects_dir)
-    if free < MIN_FREE_BYTES:
+    assets = _assets_bytes(script)
+    needed = max(MIN_FREE_FLOOR, int(assets * COPY_SAFETY_FACTOR))
+    if free < needed:
         raise E.CapcutError(
             E.DISK_FULL,
-            f"Espaço em disco insuficiente: {free / 1024**3:.1f} GiB livres.",
-            f"Libere espaço até ao menos {MIN_FREE_BYTES / 1024**3:.0f} GiB. "
-            "O save copia todos os assets para dentro do projeto.",
-            free_bytes=free,
+            f"Espaço em disco insuficiente: {free / 1024**2:.0f} MiB livres, "
+            f"e este projeto precisa de ~{needed / 1024**2:.0f} MiB.",
+            f"Libere ao menos {(needed - free) / 1024**2:.0f} MiB. O save COPIA os "
+            f"assets ({assets / 1024**2:.0f} MiB) para dentro do projeto, e o CapCut "
+            "precisa de folga para abrir.",
+            free_bytes=free, needed_bytes=needed, assets_bytes=assets,
         )
     if not shutil.which("ffprobe"):
         raise E.CapcutError(
