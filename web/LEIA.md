@@ -80,18 +80,37 @@ o motor envia era o mecanismo *anterior* a esse modelo; ele não basta mais.
 Testado no painel de preview (`ERR_BLOCKED_BY_CLIENT`) e no Chrome real do
 usuário (pendura sem erro). O lado servidor está correto nos dois.
 
-### O que fazer
+### O que fazer — e por que eu recomendei errado antes
 
-1. **Use a interface local** (`http://127.0.0.1:5151`): mesma tela, mesmo código,
-   sem pareamento e sem a restrição, porque é mesma origem. **É a recomendação.**
-2. **Liberar por máquina**: `chrome://settings/content/localNetworkAccess`,
-   autorizar `capcut-front.vercel.app`, e clicar em Conectar de novo. Num parque
-   gerenciado, a política `LocalNetworkAccessAllowedForUrls` faz isso de uma vez.
-3. **Inverter o sentido da conexão**, se o URL único for requisito de verdade: o
-   motor local abre um WebSocket de saída para um relay hospedado, e o trabalho
-   desce por ele. Não há chamada para `127.0.0.1` a partir da página, então o LNA
-   não se aplica. É como túnel de desenvolvimento funciona — e é um serviço novo
-   a construir e manter, não uma configuração.
+Cheguei a construir o relay (caminho 3) tratando isso como bloqueio. **Não é.**
+Inspecionando o perfil do Chrome desta máquina:
+
+```
+loopback_network:
+  setting=1 (PERMITIDO)  https://zeus-b2-b-...vercel.app
+  setting=2 (BLOQUEADO)  https://gpm.plusmidiamkt.com
+
+permission_autoblocking_data:
+  https://capcut-front.vercel.app -> LoopbackNetwork: {ignore_count: 2}
+```
+
+Ou seja: **outro app da Vercel já tem a permissão concedida neste navegador** — o
+mecanismo funciona. E o `capcut-front` acumulou dois "ignore", que foram os meus
+dois cliques automatizados: o prompt apareceu, a automação não interagiu, e o
+Chrome parou de oferecer. Eu li "falha silenciosa" como "impossível" quando era
+"ninguém clicou em permitir".
+
+1. **Liberar a permissão, uma vez por navegador** — em
+   `chrome://settings/content/localNetworkAccess`, adicionar
+   `https://capcut-front.vercel.app`. Num parque gerenciado, a política
+   `LocalNetworkAccessAllowedForUrls` faz de uma vez. **É a recomendação, e não
+   custa banco nem relay.**
+2. **Interface local** (`http://127.0.0.1:5151`): mesma tela, mesma origem, nem
+   permissão precisa. Só não dá URL compartilhado.
+3. **Relay** (`/relay` no app hospedado): o motor liga para fora e puxa trabalho,
+   sem nenhuma chamada para a rede local. Custa um Postgres e uma fila. Só vale
+   se a permissão do caminho 1 não for aceitável — parque não gerenciado, ou
+   navegador que não ofereça a opção.
 
 A tela hospedada explica isso sozinha quando a conexão pendura, com o caminho da
 configuração e o link para a versão local. O que ela não faz é fingir que
