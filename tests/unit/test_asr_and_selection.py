@@ -23,8 +23,8 @@ REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 sys.path.insert(0, os.path.join(REPO, "src"))
 FX = os.path.abspath(os.path.join(REPO, "..", "fixtures"))
 
-from capcut_mcp import (asr, errors as E, obs, registry, timemap,  # noqa: E402
-                        tools, validator as V)
+from capcut_mcp import (asr, errors as E, handlers_media as HM, obs,  # noqa: E402
+                        registry, timemap, tools, validator as V)
 
 WAV = os.path.join(FX, "fala_pt.wav")           # 16,72 s, fala PT-BR conhecida
 VIDEO_FALA = os.path.join(FX, "video_fala.mp4")  # 18,77 s, mesma fala
@@ -504,3 +504,71 @@ def test_schemas_novos_sao_fechados():
         s = tools.TOOLS[nome]["schema"]
         assert s["additionalProperties"] is False, nome
         assert json.dumps(s), nome
+
+
+# ==================================== contraste da legenda (achado do AC7)
+def _stroke_do_preset(draft_id, preset):
+    """Largura de stroke que um preset realmente grava no JSON."""
+    from capcut_mcp.upstream import DRAFT_CACHE
+    call("capcut.video.add", draft_id=draft_id, source=VIDEO_MUDO)
+    call("capcut.subtitle.add", draft_id=draft_id, style=preset, track="s",
+         segments=[{"start": 0.2, "end": 2.0, "text": "preço"}], font_size=8.0)
+    script = DRAFT_CACHE[draft_id]
+    mat_id = script.tracks["s"].segments[0].material_id
+    for m in script.materials.texts:          # o L0 guarda estes como dict
+        if m.get("id") != mat_id:
+            continue
+        estilo = json.loads(m["content"])["styles"][0]
+        strokes = estilo.get("strokes") or []
+        return strokes[0]["width"] if strokes else None
+    return None
+
+
+def test_mapeamento_de_borda_do_upstream_e_o_que_pensamos(draft):
+    """O L0 faz `width / 100 * 0.2`, e o comentário dele diz que pode estar errado.
+
+    Este teste fixa o mapeamento: se o upstream mudar, a calibração de todos os
+    presets muda com ele, e é melhor descobrir aqui do que na tela.
+    """
+    largura = HM.SUBTITLE_PRESETS["outline"]["border_width"]
+    assert _stroke_do_preset(draft, "outline") == pytest.approx(
+        largura / 100.0 * 0.2), "o L0 mudou o mapeamento de border_width"
+
+
+def test_presets_com_contraste_gravam_stroke_ou_fundo(draft):
+    """Um preset que promete contraste não pode sair sem nada no JSON."""
+    for preset in ("outline", "outline_boxed"):
+        d, _ = call("capcut.draft.create", name=f"p-{preset}",
+                    width=1080, height=1920)
+        try:
+            assert _stroke_do_preset(d["draft_id"], preset), \
+                f"o preset '{preset}' não gravou stroke nenhum"
+        finally:
+            registry.discard(d["draft_id"])
+
+
+@pytest.mark.xfail(reason="ACHADO ABERTO do AC7: a borda do preset 'outline' é "
+                          "0.012, contra 0.08 do default do L0 — na tela a legenda "
+                          "sai ilegível sobre fundo claro. O valor novo precisa ser "
+                          "MEDIDO no projeto 'Borda Calibra', não escolhido de "
+                          "cabeça. Este xfail vira passe quando isso acontecer.",
+                   strict=True)
+def test_borda_do_outline_e_espessa_o_bastante(draft):
+    """Piso provisório: a borda do default não deveria ser mais fina que a do L0."""
+    assert _stroke_do_preset(draft, "outline") >= 0.08
+
+
+def test_subtitle_nao_promete_borda_que_nao_aceita():
+    """A legenda só dá contraste por preset. Então não pode anunciar outra coisa.
+
+    O apply_subtitle monta os kwargs com `**style` e IGNORA border_width vindo do
+    chamador — ao contrário do apply_text. Como o schema não expõe esses campos,
+    pelo MCP ninguém consegue passá-los e o silêncio não machuca; se algum dia
+    forem expostos, o applier tem de passar a lê-los.
+    """
+    for nome in ("capcut.subtitle.add", "capcut.subtitle.from_transcript"):
+        props = tools.TOOLS[nome]["schema"]["properties"]
+        expostos = [k for k in props if "border" in k or "background" in k]
+        assert not expostos, (
+            f"{nome} passou a expor {expostos}, mas apply_subtitle ainda ignora "
+            "esses campos — ligue-os no applier antes de expor no schema")
