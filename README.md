@@ -71,12 +71,34 @@ você pedir — o critério está nas `instructions` do servidor.
 Imagem, áudio, catálogos, `inspect` e `rebuild` continuam **implementados e testados**,
 fora da superfície MCP. Para expô-los: `CAPCUT_ENABLE_ALL_TOOLS=1`.
 
+## Front local (chat + anexo de vídeo)
+
+```sh
+uv pip install --python .venv/bin/python -r web/requirements.txt
+export ANTHROPIC_API_KEY=sk-ant-...
+PYTHONPATH=src ./.venv/bin/python web/app.py     # http://127.0.0.1:5151
+```
+
+Interface de chat: anexa o vídeo, escreve o pedido, e a tela mostra cada tool que
+rodou com o resultado e os avisos. **Roda local, em `127.0.0.1` só** — ele escreve
+na pasta de projetos do CapCut desta máquina.
+
+**Não há OAuth do CapCut**, e não é limitação de esforço: a plataforma aberta deles
+é para plugins que rodam dentro do editor, e a API pública é de texto-para-vídeo e
+templates. Como o adaptador entrega projeto **escrevendo arquivos no disco local**,
+um servidor hospedado não alcançaria o Mac de outra pessoa de qualquer forma. Cada
+pessoa roda o front na sua máquina, onde o CapCut dela já está logado.
+
+A transcrição é local e grátis; a LLM é paga e serve para **escolher** os trechos.
+Medido: ~$0,37 por vídeo de 30 min no Opus 5 com cache de prompt (~$0,15 no
+Sonnet 5). Detalhes, tabela por duração e o desenho em [web/LEIA.md](web/LEIA.md).
+
 ## Testes
 
 ```sh
 PYTHONPATH=src ./.venv/bin/python -m pytest tests/ -q
 ```
 
-177 testes. Os que gravam de verdade exigem 2 GiB livres, senão o guarda
-`DISK_FULL` os reprova de propósito. Medições e verificações visuais ficam em
-`../evidence/`.
+220 testes. Os que gravam de verdade exigem espaço em disco proporcional aos
+assets (piso de 512 MiB), senão o guarda `DISK_FULL` os reprova de propósito.
+Medições e verificações visuais ficam em `evidence/`.

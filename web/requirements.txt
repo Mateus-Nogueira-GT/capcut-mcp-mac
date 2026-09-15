@@ -1,0 +1,4 @@
+# Dependências SÓ do front. O adaptador MCP (src/capcut_mcp) continua nas 6
+# dependências do L0 — nada daqui é importado por ele.
+-r ../requirements.txt
+anthropic>=0.40
