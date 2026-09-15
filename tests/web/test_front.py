@@ -217,3 +217,103 @@ def test_tipo_errado_e_recusado():
     r = front.executa_tool("capcut_draft_create",
                            {"name": "x", "width": "mil", "height": 1920})
     assert r["ok"] is False and r["error"]["code"] != "INTERNAL_ERROR"
+
+
+# ============================= portaria: UI hospedada dirigindo o motor local
+# A UI na Vercel roda no navegador DA MESMA máquina, então alcança 127.0.0.1.
+# O efeito colateral é que qualquer página aberta no navegador tentaria o mesmo.
+# Duas travas, e as duas precisam de teste: allowlist de origem e token.
+EXTERNA = "https://capcut-front.vercel.app"
+
+
+@pytest.fixture
+def externo(monkeypatch):
+    monkeypatch.setenv("CAPCUT_ALLOW_ORIGIN", EXTERNA)
+    return EXTERNA
+
+
+def test_local_nao_precisa_de_token(cliente):
+    """A página servida pelo próprio motor não tem o que parear."""
+    assert cliente.get("/api/ping").status_code == 200
+    assert cliente.get("/api/ambiente").status_code == 200
+    assert cliente.get("/api/ping",
+                       headers={"Origin": "http://127.0.0.1:5151"}).status_code == 200
+
+
+def test_origem_desconhecida_e_recusada(cliente):
+    r = cliente.get("/api/ping", headers={"Origin": "https://site-qualquer.com"})
+    assert r.status_code == 403
+    assert "CAPCUT_ALLOW_ORIGIN" in r.get_json()["erro"], \
+        "o 403 tem de dizer como autorizar, senão ninguém descobre"
+
+
+def test_origem_na_allowlist_ainda_exige_token(cliente, externo):
+    """Só a allowlist não basta: requisição simples dispara sem preflight."""
+    r = cliente.get("/api/ping", headers={"Origin": externo})
+    assert r.status_code == 401
+    assert r.get_json()["precisa_pareamento"] is True
+
+
+def test_token_errado_nao_passa(cliente, externo):
+    import app as f
+    assert cliente.get("/api/ping", headers={
+        "Origin": externo, "X-Pair-Token": "chute"}).status_code == 401
+    # e um token com o prefixo certo também não
+    bom = f.token_pareamento()
+    assert cliente.get("/api/ping", headers={
+        "Origin": externo, "X-Pair-Token": bom[:-1]}).status_code == 401
+
+
+def test_token_certo_passa_e_traz_cors(cliente, externo):
+    import app as f
+    r = cliente.get("/api/ping", headers={"Origin": externo,
+                                          "X-Pair-Token": f.token_pareamento()})
+    assert r.status_code == 200
+    assert r.headers["Access-Control-Allow-Origin"] == externo
+    assert r.headers["Vary"] == "Origin", "sem Vary, cache serve a origem errada"
+    assert "X-Pair-Token" in r.headers["Access-Control-Allow-Headers"]
+    # Private Network Access do Chrome: página pública chamando 127.0.0.1
+    assert r.headers["Access-Control-Allow-Private-Network"] == "true"
+
+
+def test_token_certo_de_origem_errada_nao_passa(cliente, externo):
+    """Vazar o token não deve bastar: a origem continua valendo."""
+    import app as f
+    r = cliente.get("/api/ping", headers={"Origin": "https://ladrao.com",
+                                          "X-Pair-Token": f.token_pareamento()})
+    assert r.status_code == 403
+
+
+def test_preflight_responde_sem_token(cliente, externo):
+    """O preflight não carrega header customizado — não pode exigir token."""
+    r = cliente.open("/api/chat", method="OPTIONS", headers={
+        "Origin": externo,
+        "Access-Control-Request-Method": "POST",
+        "Access-Control-Request-Headers": "content-type,x-pair-token",
+    })
+    assert r.status_code == 204
+    assert r.headers["Access-Control-Allow-Origin"] == externo
+
+
+def test_curinga_de_origem_nao_e_aceito(cliente, monkeypatch):
+    """'*' na allowlist abriria o motor para qualquer site."""
+    monkeypatch.setenv("CAPCUT_ALLOW_ORIGIN", "*")
+    r = cliente.get("/api/ping", headers={"Origin": "https://qualquer.com"})
+    assert r.status_code == 403
+
+
+def test_token_e_estavel_e_com_permissao_restrita():
+    import app as f
+    t1 = f.token_pareamento()
+    assert t1 == f.token_pareamento(), "reiniciar o motor não pode trocar o token"
+    assert len(t1) >= 32
+    modo = oct(os.stat(f.TOKEN_PATH).st_mode)[-3:]
+    assert modo == "600", f"o token está {modo}, deveria ser 600"
+
+
+def test_escritas_tambem_estao_protegidas(cliente, externo):
+    """As rotas que gravam em disco são as que mais importam."""
+    for rota, carga in (("/api/revelar", {"caminho": "/tmp"}),
+                        ("/api/chat", {"texto": "oi"})):
+        r = cliente.post(rota, json=carga, headers={"Origin": externo})
+        assert r.status_code == 401, f"{rota} passou sem token"

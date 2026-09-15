@@ -40,9 +40,43 @@ from capcut_mcp import errors as E, obs, profile, server as mcp_server, tools  #
 app = Flask(__name__, static_folder="static", static_url_path="")
 
 MODEL = os.environ.get("CAPCUT_MODEL", "claude-opus-5")
-UPLOADS = os.path.expanduser("~/Library/Application Support/capcut-mcp/uploads")
+BASE_APOIO = os.path.expanduser("~/Library/Application Support/capcut-mcp")
+UPLOADS = os.path.join(BASE_APOIO, "uploads")
+TOKEN_PATH = os.path.join(BASE_APOIO, "pair_token")
 MAX_TURNOS = 24          # teto do loop: sem isto um erro repetido gira para sempre
 MAX_UPLOAD_MB = 2048
+
+# Origens que podem dirigir este motor de fora. A UI hospedada (Vercel) roda no
+# navegador DA MESMA máquina, então ela alcança 127.0.0.1 — mas isso significa
+# que qualquer página aberta no navegador tentaria o mesmo. Duas travas:
+#   1. allowlist de origem exata (sem curinga, sem preview aleatório);
+#   2. token de pareamento obrigatório em toda requisição de outra origem.
+# Só a primeira não bastaria: requisição simples de formulário dispara sem
+# preflight, e aí a origem nem é checada pelo navegador.
+ORIGENS_LOCAIS = {f"http://127.0.0.1:{p}" for p in (5151, 3000, 5173)} | \
+                 {f"http://localhost:{p}" for p in (5151, 3000, 5173)}
+
+
+def origens_externas() -> set:
+    bruto = os.environ.get("CAPCUT_ALLOW_ORIGIN", "")
+    return {o.strip().rstrip("/") for o in bruto.split(",") if o.strip()}
+
+
+def token_pareamento() -> str:
+    """Segredo estável desta máquina, criado na primeira execução."""
+    try:
+        with open(TOKEN_PATH, encoding="utf-8") as f:
+            t = f.read().strip()
+            if t:
+                return t
+    except OSError:
+        pass
+    t = uuid.uuid4().hex
+    os.makedirs(BASE_APOIO, exist_ok=True)
+    with open(TOKEN_PATH, "w", encoding="utf-8") as f:
+        f.write(t)
+    os.chmod(TOKEN_PATH, 0o600)
+    return t
 
 # Os nomes das tools do MCP têm ponto (`capcut.video.cut`), que a API de tool use
 # não aceita. A tradução é só de nome; o schema vai inteiro.
@@ -235,10 +269,62 @@ def resumo_da_tool(nome: str, saida: Dict[str, Any]) -> str:
     return "ok"
 
 
+# ------------------------------------------------------- portaria e CORS
+import hmac  # noqa: E402  (fica junto do uso, que é só aqui)
+
+
+def _origem_ok(origem: str) -> bool:
+    return bool(origem) and (origem in ORIGENS_LOCAIS or origem in origens_externas())
+
+
+@app.before_request
+def portaria():
+    origem = (request.headers.get("Origin") or "").rstrip("/")
+
+    # Private Network Access do Chrome: uma página pública que chama 127.0.0.1
+    # manda um preflight pedindo permissão explícita. Sem responder, a chamada
+    # falha com um erro que não diz o motivo.
+    if request.method == "OPTIONS":
+        return ("", 204)
+
+    if not origem or origem in ORIGENS_LOCAIS:
+        return None                       # página servida por este próprio motor
+
+    if not _origem_ok(origem):
+        return jsonify({"erro": "Origem não autorizada. Suba o motor com "
+                                "CAPCUT_ALLOW_ORIGIN=https://seu-app.vercel.app"}), 403
+
+    enviado = request.headers.get("X-Pair-Token", "")
+    if not hmac.compare_digest(enviado, token_pareamento()):
+        return jsonify({"erro": "Token de pareamento inválido ou ausente.",
+                        "precisa_pareamento": True}), 401
+    return None
+
+
+@app.after_request
+def cabecalhos_cors(resp):
+    origem = (request.headers.get("Origin") or "").rstrip("/")
+    if _origem_ok(origem):
+        resp.headers["Access-Control-Allow-Origin"] = origem
+        resp.headers["Vary"] = "Origin"
+        resp.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+        resp.headers["Access-Control-Allow-Headers"] = "Content-Type, X-Pair-Token"
+        resp.headers["Access-Control-Allow-Private-Network"] = "true"
+        resp.headers["Access-Control-Max-Age"] = "600"
+    return resp
+
+
 # -------------------------------------------------------------------- rotas
 @app.get("/")
 def raiz():
     return send_from_directory("static", "index.html")
+
+
+@app.get("/api/ping")
+def ping():
+    """A UI hospedada chama isto para saber se achou o motor e se está pareada."""
+    return jsonify({"motor": "capcut-mcp-mac", "porta": request.host,
+                    "pareado": True})
 
 
 @app.get("/api/ambiente")
@@ -332,10 +418,21 @@ def revelar():
 
 if __name__ == "__main__":
     porta = int(os.environ.get("PORT", "5151"))
-    print(f"\n  Front do CapCut MCP em  http://127.0.0.1:{porta}\n")
+    print(f"\n  Motor local em  http://127.0.0.1:{porta}")
+    externas = origens_externas()
+    if externas:
+        print(f"  UI hospedada autorizada: {', '.join(sorted(externas))}")
+        print(f"  Token de pareamento: {token_pareamento()}")
+        print("  (cole este token uma vez na UI hospedada; ele fica salvo no "
+              "navegador)")
+    else:
+        print("  Para usar com a UI hospedada, suba assim:")
+        print("    CAPCUT_ALLOW_ORIGIN=https://seu-app.vercel.app \\")
+        print("      PYTHONPATH=src ./.venv/bin/python web/app.py")
     if not os.environ.get("ANTHROPIC_API_KEY"):
-        print("  ANTHROPIC_API_KEY não está definida — o chat vai falhar na "
-              "primeira mensagem.\n")
+        print("\n  ANTHROPIC_API_KEY não está definida — o chat vai falhar na "
+              "primeira mensagem.")
+    print()
     # host fixo em loopback: isto escreve na pasta de projetos do CapCut local e
     # executa o que a LLM pedir. Não deve ficar acessível na rede.
     app.run(host="127.0.0.1", port=porta, threaded=True)

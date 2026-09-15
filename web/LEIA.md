@@ -55,6 +55,50 @@ paga.
 
 ---
 
+## UI hospedada na Vercel: subiu, mas o Chrome barra
+
+`https://capcut-front.vercel.app` está no ar e serve a mesma tela, com uma etapa
+de pareamento. **Ela não conecta no motor local no Chrome padrão**, e isso foi
+verificado, não suposto.
+
+O que foi medido:
+
+| | |
+|---|---|
+| Motor responde por `curl` com `Origin` da Vercel + token | `200`, com `Access-Control-Allow-Private-Network: true` |
+| Página HTTPS chamando `http://127.0.0.1:5151` | **pendura até o timeout** |
+| Página HTTPS chamando `http://localhost:5151` | **pendura até o timeout** |
+| A requisição chega ao motor? | **não aparece no log dele** |
+| Erro no console do navegador? | **nenhum** |
+
+A causa é o **Local Network Access** do Chrome, ligado por padrão desde a versão
+142 (out/2025): uma página de origem pública que chama um endereço de rede local
+precisa de permissão explícita do usuário, e sem ela a requisição **falha em
+silêncio** — sem erro de CORS, sem nada no console. O `Allow-Private-Network` que
+o motor envia era o mecanismo *anterior* a esse modelo; ele não basta mais.
+
+Testado no painel de preview (`ERR_BLOCKED_BY_CLIENT`) e no Chrome real do
+usuário (pendura sem erro). O lado servidor está correto nos dois.
+
+### O que fazer
+
+1. **Use a interface local** (`http://127.0.0.1:5151`): mesma tela, mesmo código,
+   sem pareamento e sem a restrição, porque é mesma origem. **É a recomendação.**
+2. **Liberar por máquina**: `chrome://settings/content/localNetworkAccess`,
+   autorizar `capcut-front.vercel.app`, e clicar em Conectar de novo. Num parque
+   gerenciado, a política `LocalNetworkAccessAllowedForUrls` faz isso de uma vez.
+3. **Inverter o sentido da conexão**, se o URL único for requisito de verdade: o
+   motor local abre um WebSocket de saída para um relay hospedado, e o trabalho
+   desce por ele. Não há chamada para `127.0.0.1` a partir da página, então o LNA
+   não se aplica. É como túnel de desenvolvimento funciona — e é um serviço novo
+   a construir e manter, não uma configuração.
+
+A tela hospedada explica isso sozinha quando a conexão pendura, com o caminho da
+configuração e o link para a versão local. O que ela não faz é fingir que
+funcionou.
+
+---
+
 ## Sobre os tokens: sim, gasta — e onde
 
 **A transcrição é local e grátis.** whisper.cpp, nada sai da máquina, sem cobrança
